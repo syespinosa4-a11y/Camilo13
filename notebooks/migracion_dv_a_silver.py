@@ -15,50 +15,57 @@
 # MAGIC %md
 # MAGIC ## Bloque 1 — Configuración de tablas a migrar
 # MAGIC
-# MAGIC Aquí se declara el mapa de migración. Cada entrada indica:
-# MAGIC - `source`: tabla completa en el catálogo origen (`catalog.schema.table`)
-# MAGIC - `target`: tabla satélite completa en el catálogo destino (`catalog.schema.table`)
-# MAGIC - `mode`: modo de escritura (`overwrite` reemplaza todo, `append` acumula filas)
+# MAGIC Cada entrada del mapa indica:
+# MAGIC - `source`: tabla completa en el catálogo origen
+# MAGIC - `target`: tabla satélite destino
+# MAGIC - `mode`: `overwrite` reemplaza todo, `append` acumula filas
+# MAGIC - `id_col`: nombre de la columna autoincremental NOT NULL que se genera al vuelo
+# MAGIC   (pon `None` si la tabla destino no tiene esa restricción)
 # MAGIC
 # MAGIC **Solo las tablas listadas aquí serán procesadas.**
-# MAGIC Añade o quita entradas según lo que necesites migrar.
 
 MIGRATION_MAP = [
 
     # ── sat_arl  ←  core_as400 ──────────────────────────────────────────────
     {
-        "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaactaf0`",
+        "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaempaf0`",
         "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
-        "mode":   "overwrite",           # cambia a "append" si prefieres acumular
+        "mode":   "overwrite",
+        "id_col": "id_sat_arl",      # columna NOT NULL autoincremental en el destino
     },
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaafaaf0`",
         "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
         "mode":   "append",
+        "id_col": "id_sat_arl",
     },
 
     # ── sat_beyond_health  ←  core_bh ───────────────────────────────────────
     {
-        "source": "`axa_col_dv`.`core_bh`.`bh_sa_account_to_pay`",
+        "source": "`axa_col_dv`.`core_bh`.`bh_sa_person`",
         "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
         "mode":   "overwrite",
+        "id_col": "id_sat_beyond_health",
     },
     {
-        "source": "`axa_col_dv`.`core_bh`.`bh_sa_accounting_account_closing`",
+        "source": "`axa_col_dv`.`core_bh`.`bh_sa_address_telephone_number`",
         "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
         "mode":   "append",
+        "id_col": "id_sat_beyond_health",
     },
 
     # ── sat_pyc  ←  core_sise ───────────────────────────────────────────────
     {
-        "source": "`axa_col_dv`.`core_sise`.`ss_magente`",
+        "source": "`axa_col_dv`.`core_sise`.`ss_mpersona`",
         "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
         "mode":   "overwrite",
+        "id_col": "id_sat_pyc",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_maseg_header`",
         "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
         "mode":   "append",
+        "id_col": "id_sat_pyc",
     },
 
     # Añade más entradas aquí con el mismo formato ...
@@ -68,24 +75,23 @@ MIGRATION_MAP = [
 # MAGIC %md
 # MAGIC ## Bloque 2 — Función auxiliar de migración
 # MAGIC
-# MAGIC `migrate_table` realiza tres pasos por cada entrada del mapa:
+# MAGIC `migrate_table` realiza los siguientes pasos:
 # MAGIC 1. Lee la tabla fuente como DataFrame de Spark.
-# MAGIC 2. Escribe en la tabla destino usando el modo configurado.
-# MAGIC 3. Registra el resultado (éxito o error) para el resumen final.
-# MAGIC
-# MAGIC El uso de backticks en los nombres permite manejar catálogos con guiones
-# MAGIC (ej. `uc-axa-cli`) sin que Spark los interprete como operadores de resta.
+# MAGIC 2. Si `id_col` está definido, genera esa columna como número secuencial (`row_number`)
+# MAGIC    para satisfacer la restricción NOT NULL del satélite destino.
+# MAGIC    - En modo `overwrite` el contador parte desde 1.
+# MAGIC    - En modo `append` consulta el máximo id actual en el destino y continúa desde ahí,
+# MAGIC      evitando colisiones de claves con filas ya existentes.
+# MAGIC 3. Escribe en Delta con `mergeSchema=true` para tolerar columnas distintas entre fuentes.
+# MAGIC 4. Registra el resultado para el resumen del bloque 4.
 
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, Window
+from pyspark.sql import functions as F
 from datetime import datetime
 
 spark = SparkSession.builder.getOrCreate()
 
-def migrate_table(source: str, target: str, mode: str) -> dict:
-    """
-    Lee `source` y escribe en `target` con el modo indicado.
-    Devuelve un dict con el resultado para el log final.
-    """
+def migrate_table(source: str, target: str, mode: str, id_col: str = None) -> dict:
     result = {"source": source, "target": target, "mode": mode,
               "status": None, "rows": None, "error": None,
               "timestamp": datetime.now().isoformat(timespec="seconds")}
@@ -93,11 +99,26 @@ def migrate_table(source: str, target: str, mode: str) -> dict:
         df = spark.sql(f"SELECT * FROM {source}")
         row_count = df.count()
 
+        if id_col:
+            if mode == "append":
+                # Continúa la secuencia desde el máximo id existente en el destino
+                try:
+                    max_id = spark.sql(
+                        f"SELECT COALESCE(MAX({id_col}), 0) AS max_id FROM {target}"
+                    ).collect()[0]["max_id"]
+                except Exception:
+                    max_id = 0   # la tabla destino aún no existe
+            else:
+                max_id = 0       # overwrite: siempre parte desde 1
+
+            window = Window.orderBy(F.monotonically_increasing_id())
+            df = df.withColumn(id_col, F.row_number().over(window) + max_id)
+
         (
             df.write
-              .format("delta")          # Unity Catalog exige formato Delta
+              .format("delta")
               .mode(mode)
-              .option("mergeSchema", "true")   # permite diferencias de esquema entre tablas fuente
+              .option("mergeSchema", "true")
               .saveAsTable(target)
         )
 
@@ -134,6 +155,7 @@ for entry in MIGRATION_MAP:
             source=entry["source"],
             target=entry["target"],
             mode=entry["mode"],
+            id_col=entry.get("id_col"),   # None si la entrada no declara id_col
         )
     )
 
