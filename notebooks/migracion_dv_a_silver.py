@@ -213,7 +213,7 @@ print(f"\nTablas migradas correctamente : {ok_count}")
 print(f"Tablas con error              : {error_count}")
 print(f"Total procesadas              : {len(log)}\n")
 
-summary_df["rows"] = summary_df["rows"].apply(lambda x: str(int(x)) if x is not None and str(x) != "" else "")
+summary_df["rows"] = summary_df["rows"].apply(lambda x: str(int(x)) if pd.notna(x) else "")
 display(spark.createDataFrame(summary_df.fillna("")))
 
 # COMMAND ----------
