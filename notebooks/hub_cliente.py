@@ -1,109 +1,131 @@
 # Databricks notebook source
+# NTT DATA
 # MAGIC %md
-# MAGIC # Carga HUB_CLIENTE
+# MAGIC # HUB_CLIENTE — Unificación de satélites silver
 # MAGIC
-# MAGIC Unifica datos de los 3 satélites silver y los carga en `uc-axa-cli.gold.hub_cliente`.
+# MAGIC Lee los 3 satélites ya migrados, los unifica y carga en `uc-axa-cli.silver.sv_hub_clientes`
+# MAGIC mediante MERGE (upsert) sobre la llave de negocio `id_cliente`.
 # MAGIC
-# MAGIC | Satélite fuente                          | Sistema origen |
-# MAGIC |------------------------------------------|----------------|
-# MAGIC | `uc-axa-cli.silver.sv_sat_arl`           | AS400 / ARL    |
-# MAGIC | `uc-axa-cli.silver.sv_sat_beyond_health` | Beyond Health  |
-# MAGIC | `uc-axa-cli.silver.sv_sat_pyc`           | SISE / PyC     |
-# MAGIC
-# MAGIC **Estrategia de carga:** MERGE (upsert) sobre la llave de negocio `bk_cliente`.
-# MAGIC Registros nuevos se insertan; registros existentes se actualizan solo si cambia
-# MAGIC algún atributo relevante (`dv_hashdiif`).
+# MAGIC | Satélite                                 | PK propia          |
+# MAGIC |------------------------------------------|--------------------|
+# MAGIC | `uc-axa-cli.silver.sv_sat_arl`           | `id_sat_arl`       |
+# MAGIC | `uc-axa-cli.silver.sv_sat_beyond_health` | `id_sat_beyond_health` |
+# MAGIC | `uc-axa-cli.silver.sv_sat_pyc`           | `id_sat_pyc`       |
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Bloque 1 — Configuración
 
-# ── Tablas fuente ────────────────────────────────────────────────────────────
-SAT_ARL           = "`uc-axa-cli`.`silver`.`sv_sat_arl`"
-SAT_BEYOND_HEALTH = "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`"
-SAT_PYC           = "`uc-axa-cli`.`silver`.`sv_sat_pyc`"
-
-# ── Tabla destino ────────────────────────────────────────────────────────────
-HUB_CLIENTE = "`uc-axa-cli`.`gold`.`hub_cliente`"
-
-# ── Catálogo / esquema destino (para CREATE TABLE IF NOT EXISTS) ─────────────
-HUB_CATALOG = "uc-axa-cli"
-HUB_SCHEMA  = "gold"
-HUB_TABLE   = "hub_cliente"
-
-# ── Columna de llave de negocio unificada ────────────────────────────────────
-# Cambia este valor al nombre real de la columna que identifica al cliente
-# en cada satélite (puede ser distinto por satélite; ver Bloque 2).
-BK_COL_ARL  = "num_identificacion"   # columna BK en sv_sat_arl
-BK_COL_BH   = "num_identificacion"   # columna BK en sv_sat_beyond_health
-BK_COL_PYC  = "num_identificacion"   # columna BK en sv_sat_pyc
-
-# ── Sistema origen (para trazabilidad) ──────────────────────────────────────
-RECORD_SOURCE_ARL = "ARL-AS400"
-RECORD_SOURCE_BH  = "BEYOND_HEALTH"
-RECORD_SOURCE_PYC = "SISE-PYC"
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Bloque 2 — Mapeo de columnas hacia HUB_CLIENTE
-# MAGIC
-# MAGIC Define qué columna de cada satélite mapea a cada campo del HUB.
-# MAGIC Deja el valor en `None` si el satélite no tiene ese campo.
-# MAGIC El notebook intentará rellenar con `NULL` los campos ausentes.
-# MAGIC
-# MAGIC Formato:
-# MAGIC ```
-# MAGIC COLUMN_MAP = {
-# MAGIC     "<campo_hub>": {
-# MAGIC         "arl": "<col_en_sat_arl>",
-# MAGIC         "bh":  "<col_en_sat_bh>",
-# MAGIC         "pyc": "<col_en_sat_pyc>",
-# MAGIC     },
-# MAGIC     ...
-# MAGIC }
-# MAGIC ```
-
-COLUMN_MAP = {
-    # Identificación principal del cliente
-    "bk_cliente":           {"arl": BK_COL_ARL,          "bh": BK_COL_BH,          "pyc": BK_COL_PYC},
-    "tipo_identificacion":  {"arl": "tipo_identificacion","bh": "tipo_identificacion","pyc": "tipo_identificacion"},
-
-    # Datos personales
-    "primer_nombre":        {"arl": "primer_nombre",      "bh": "primer_nombre",     "pyc": "primer_nombre"},
-    "segundo_nombre":       {"arl": "segundo_nombre",     "bh": "segundo_nombre",    "pyc": "segundo_nombre"},
-    "primer_apellido":      {"arl": "primer_apellido",    "bh": "primer_apellido",   "pyc": "primer_apellido"},
-    "segundo_apellido":     {"arl": "segundo_apellido",   "bh": "segundo_apellido",  "pyc": "segundo_apellido"},
-    "fecha_nacimiento":     {"arl": "fecha_nacimiento",   "bh": "fecha_nacimiento",  "pyc": "fecha_nacimiento"},
-    "genero":               {"arl": "genero",             "bh": "genero",            "pyc": "genero"},
-
-    # Contacto
-    "telefono":             {"arl": "telefono",           "bh": "telefono",          "pyc": "telefono"},
-    "email":                {"arl": "email",              "bh": "email",             "pyc": "email"},
-
-    # Dirección
-    "direccion":            {"arl": "direccion",          "bh": "direccion",         "pyc": "direccion"},
-    "ciudad":               {"arl": "ciudad",             "bh": "ciudad",            "pyc": "ciudad"},
-    "departamento":         {"arl": "departamento",       "bh": "departamento",      "pyc": "departamento"},
-    "pais":                 {"arl": "pais",               "bh": "pais",              "pyc": "pais"},
-}
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Bloque 3 — Inicialización
-
-from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+import pyspark.sql.functions as F
+from pyspark.sql import Window
 from datetime import datetime, timezone
-import hashlib
 
-spark = SparkSession.builder.getOrCreate()
+spark.conf.set("spark.sql.session.timeZone", "America/Bogota")
 
-LOAD_TIMESTAMP = datetime.now(timezone.utc).isoformat(timespec="seconds")
+# Tablas fuente (backticks obligatorios por el guión en uc-axa-cli)
+SAT_ARL   = "`uc-axa-cli`.`silver`.`sv_sat_arl`"
+SAT_BH    = "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`"
+SAT_PYC   = "`uc-axa-cli`.`silver`.`sv_sat_pyc`"
 
-print(f"Inicio : {LOAD_TIMESTAMP}")
-print(f"Destino: {HUB_CLIENTE}\n")
+# Tabla destino
+HUB_TABLE = "`uc-axa-cli`.`silver`.`sv_hub_clientes`"
 
+# Columna que actúa como llave de negocio del cliente en cada satélite.
+# Ajusta este nombre si en tus tablas se llama distinto.
+BK_COLUMN = "id_cliente"
+
+LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+print(f"Inicio : {LOAD_TS}")
+print(f"Destino: {HUB_TABLE}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Bloque 2 — Lectura de satélites
+# MAGIC
+# MAGIC Se usa `spark.sql("SELECT * FROM ...")` con backticks para evitar el error
+# MAGIC `INVALID_IDENTIFIER` que produce `spark.table()` con catálogos que contienen guión.
+
+def read_sat(table_sql: str, sat_name: str, pk_col: str) -> "DataFrame":
+    """
+    Lee el satélite completo y agrega la columna de metadatos `satelite`.
+    Si la columna BK_COLUMN no existe en el satélite, la crea como NULL.
+    """
+    df = spark.sql(f"SELECT * FROM {table_sql}")
+    if BK_COLUMN not in df.columns:
+        df = df.withColumn(BK_COLUMN, F.lit(None).cast("string"))
+    return df.withColumn("satelite", F.lit(sat_name))
+
+sat_arl_df = read_sat(SAT_ARL, "sat_arl",           "id_sat_arl")
+sat_bh_df  = read_sat(SAT_BH,  "sat_beyond_health", "id_sat_beyond_health")
+sat_pyc_df = read_sat(SAT_PYC, "sat_pyc",           "id_sat_pyc")
+
+print(f"  ARL           : {sat_arl_df.count():>10,} filas")
+print(f"  Beyond Health : {sat_bh_df.count():>10,} filas")
+print(f"  PyC / SISE    : {sat_pyc_df.count():>10,} filas")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Bloque 3 — Unificación y deduplicación
+# MAGIC
+# MAGIC 1. `unionByName(allowMissingColumns=True)` alinea esquemas distintos rellenando con NULL.
+# MAGIC 2. Se descartan filas sin `id_cliente`.
+# MAGIC 3. Por cada `id_cliente` duplicado se conserva la fila con mayor prioridad:
+# MAGIC    **ARL > Beyond Health > PyC**.
+# MAGIC 4. Se genera `pk_hub_cliente` (BIGINT secuencial) como PK del HUB.
+
+unified_raw = (
+    sat_arl_df
+    .unionByName(sat_bh_df,  allowMissingColumns=True)
+    .unionByName(sat_pyc_df, allowMissingColumns=True)
+)
+
+# Descartar filas sin llave de negocio
+unified_raw = unified_raw.filter(
+    F.col(BK_COLUMN).isNotNull() & (F.trim(F.col(BK_COLUMN)) != "")
+)
+
+# Prioridad de sistema para romper empates
+priority_expr = (
+    F.when(F.col("satelite") == "sat_arl",           1)
+     .when(F.col("satelite") == "sat_beyond_health", 2)
+     .otherwise(3)
+)
+unified_raw = unified_raw.withColumn("_priority", priority_expr)
+
+# Conservar solo la fila de mayor prioridad por id_cliente
+w_dedup = Window.partitionBy(BK_COLUMN).orderBy("_priority")
+unified_dedup = (
+    unified_raw
+    .withColumn("_rn", F.row_number().over(w_dedup))
+    .filter(F.col("_rn") == 1)
+    .drop("_priority", "_rn")
+)
+
+# PK secuencial del HUB
+w_seq = Window.orderBy(BK_COLUMN)
+unified = (
+    unified_dedup
+    .withColumn("pk_hub_cliente", F.row_number().over(w_seq).cast("long"))
+    .withColumn("fecha_creacion", F.lit(LOAD_TS))
+)
+
+# pk_hub_cliente como primera columna
+cols_ordered = ["pk_hub_cliente", BK_COLUMN, "satelite", "fecha_creacion"] + [
+    c for c in unified.columns
+    if c not in ("pk_hub_cliente", BK_COLUMN, "satelite", "fecha_creacion")
+]
+unified = unified.select(cols_ordered)
+
+total_raw   = unified_raw.count()
+total_dedup = unified.count()
+print(f"Filas antes de deduplicar : {total_raw:>10,}")
+print(f"Duplicados eliminados     : {total_raw - total_dedup:>10,}")
+print(f"Filas a cargar en el HUB  : {total_dedup:>10,}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Bloque 4 — Crear tabla destino si no existe
 
 def table_exists(table_sql: str) -> bool:
     try:
@@ -112,162 +134,11 @@ def table_exists(table_sql: str) -> bool:
     except Exception:
         return False
 
-
-def available_columns(table_sql: str) -> set:
-    """Devuelve el conjunto de columnas reales de una tabla (minúsculas)."""
-    try:
-        return {r["col_name"].lower()
-                for r in spark.sql(f"DESCRIBE TABLE {table_sql}")
-                               .filter("col_name not like '#%'")
-                               .collect()
-                if r["col_name"].strip()}
-    except Exception:
-        return set()
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Bloque 4 — Lectura y normalización de cada satélite
-# MAGIC
-# MAGIC Por cada satélite:
-# MAGIC 1. Se leen solo las columnas presentes en `COLUMN_MAP`.
-# MAGIC 2. Se renombran al nombre canónico del HUB.
-# MAGIC 3. Se agrega `record_source` para trazabilidad.
-# MAGIC 4. Las columnas ausentes se rellenan con `NULL`.
-
-
-def read_satellite(table_sql: str, source_tag: str, col_alias: dict) -> "DataFrame":
-    """
-    Lee `table_sql` y proyecta las columnas según `col_alias`
-    {hub_col: sat_col}. Columnas ausentes → NULL STRING.
-    """
-    real_cols = available_columns(table_sql)
-    select_exprs = []
-
-    for hub_col, sat_col in col_alias.items():
-        if sat_col and sat_col.lower() in real_cols:
-            select_exprs.append(
-                F.col(f"`{sat_col}`").cast(StringType()).alias(hub_col)
-            )
-        else:
-            select_exprs.append(F.lit(None).cast(StringType()).alias(hub_col))
-
-    select_exprs.append(F.lit(source_tag).alias("record_source"))
-
-    df = spark.sql(f"SELECT * FROM {table_sql}")
-    return df.select(select_exprs)
-
-
-# Mapeo hub_col → sat_col por satélite
-alias_arl = {hub: info["arl"] for hub, info in COLUMN_MAP.items()}
-alias_bh  = {hub: info["bh"]  for hub, info in COLUMN_MAP.items()}
-alias_pyc = {hub: info["pyc"] for hub, info in COLUMN_MAP.items()}
-
-print("Leyendo satélites...")
-
-df_arl = read_satellite(SAT_ARL,           RECORD_SOURCE_ARL, alias_arl)
-df_bh  = read_satellite(SAT_BEYOND_HEALTH, RECORD_SOURCE_BH,  alias_bh)
-df_pyc = read_satellite(SAT_PYC,           RECORD_SOURCE_PYC, alias_pyc)
-
-print(f"  ARL           : {df_arl.count():>10,} filas")
-print(f"  Beyond Health : {df_bh.count():>10,} filas")
-print(f"  PyC/SISE      : {df_pyc.count():>10,} filas")
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Bloque 5 — Unificación y deduplicación
-# MAGIC
-# MAGIC 1. `UNION ALL` de los 3 DataFrames.
-# MAGIC 2. Elimina filas sin `bk_cliente`.
-# MAGIC 3. Por cada `bk_cliente` duplicado se conserva la fila con mayor
-# MAGIC    prioridad de sistema: ARL > BH > PYC (configurable en `SOURCE_PRIORITY`).
-# MAGIC 4. Se genera `dv_hashdiff` (MD5 de todos los atributos) para detectar
-# MAGIC    cambios en el MERGE posterior.
-
-SOURCE_PRIORITY = {RECORD_SOURCE_ARL: 1, RECORD_SOURCE_BH: 2, RECORD_SOURCE_PYC: 3}
-
-df_union = df_arl.unionByName(df_bh).unionByName(df_pyc)
-
-# Descartar filas sin llave de negocio
-df_union = df_union.filter(F.col("bk_cliente").isNotNull() & (F.trim(F.col("bk_cliente")) != ""))
-
-# Prioridad de sistema origen
-priority_expr = (
-    F.when(F.col("record_source") == RECORD_SOURCE_ARL, 1)
-     .when(F.col("record_source") == RECORD_SOURCE_BH,  2)
-     .otherwise(3)
-)
-
-df_union = df_union.withColumn("_priority", priority_expr)
-
-# Columnas de atributos para el hashdiff (excluye metadatos)
-attr_cols = [c for c in COLUMN_MAP.keys() if c != "bk_cliente"]
-
-# Concatenar atributos para MD5
-concat_expr = F.concat_ws("||", *[F.coalesce(F.col(c), F.lit("")) for c in attr_cols])
-df_union = df_union.withColumn("dv_hashdiff", F.md5(concat_expr))
-
-# Deduplicar: conservar fila de mayor prioridad por bk_cliente
-from pyspark.sql.window import Window
-
-w = Window.partitionBy("bk_cliente").orderBy("_priority")
-df_dedup = (
-    df_union
-    .withColumn("_rn", F.row_number().over(w))
-    .filter(F.col("_rn") == 1)
-    .drop("_priority", "_rn")
-)
-
-total_before = df_union.count()
-total_after  = df_dedup.count()
-duplicates   = total_before - total_after
-
-print(f"Filas antes de deduplicar : {total_before:>10,}")
-print(f"Duplicados eliminados     : {duplicates:>10,}")
-print(f"Filas únicas              : {total_after:>10,}")
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Bloque 6 — Preparación final del DataFrame
-# MAGIC
-# MAGIC Agrega columnas de auditoría requeridas por el patrón HUB de Data Vault:
-# MAGIC - `load_date`      — timestamp de carga (UTC)
-# MAGIC - `record_source`  — sistema origen ganador tras la dedup
-# MAGIC - `dv_hashdiff`    — huella MD5 de atributos (detecta cambios)
-
-df_hub = (
-    df_dedup
-    .withColumn("load_date", F.lit(LOAD_TIMESTAMP))
-)
-
-# Orden de columnas en la tabla destino
-hub_columns = (
-    ["bk_cliente"]
-    + attr_cols
-    + ["record_source", "dv_hashdiff", "load_date"]
-)
-
-# Asegurarse de que todas las columnas existen (algunas pueden ser NULL)
-for col in hub_columns:
-    if col not in df_hub.columns:
-        df_hub = df_hub.withColumn(col, F.lit(None).cast(StringType()))
-
-df_hub = df_hub.select(hub_columns)
-
-print(f"Columnas en df_hub: {df_hub.columns}")
-print(f"Filas a cargar    : {df_hub.count():>10,}")
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Bloque 7 — Creación de la tabla destino (si no existe)
-# MAGIC
-# MAGIC La tabla se crea con el esquema inferido del DataFrame.
-# MAGIC Si ya existe, este bloque no hace nada.
-
-if not table_exists(HUB_CLIENTE):
-    print(f"Creando tabla {HUB_CLIENTE}...")
-    df_hub.limit(0).createOrReplaceTempView("_hub_schema_ref")
+if not table_exists(HUB_TABLE):
+    print(f"Creando tabla {HUB_TABLE}...")
+    unified.limit(0).createOrReplaceTempView("_hub_schema_ref")
     spark.sql(f"""
-        CREATE TABLE {HUB_CLIENTE}
+        CREATE TABLE {HUB_TABLE}
         USING DELTA
         TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
         AS SELECT * FROM _hub_schema_ref
@@ -275,30 +146,34 @@ if not table_exists(HUB_CLIENTE):
     spark.catalog.dropTempView("_hub_schema_ref")
     print("  Tabla creada.")
 else:
-    print(f"Tabla {HUB_CLIENTE} ya existe — se usará MERGE.")
+    print(f"Tabla {HUB_TABLE} ya existe — se usará MERGE.")
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Bloque 8 — Carga con MERGE (upsert)
+# MAGIC ## Bloque 5 — Carga con MERGE (upsert)
 # MAGIC
-# MAGIC - Si `bk_cliente` no existe en el HUB → INSERT.
-# MAGIC - Si existe y `dv_hashdiff` cambió → UPDATE de atributos y `load_date`.
-# MAGIC - Si existe y `dv_hashdiff` es igual → no se toca (sin I/O innecesario).
+# MAGIC - `id_cliente` nuevo → INSERT
+# MAGIC - `id_cliente` existente → UPDATE de todos los atributos
+# MAGIC
+# MAGIC **Nota:** `pk_hub_cliente` no se actualiza en registros ya existentes
+# MAGIC para preservar la estabilidad de la clave surrogate del HUB.
 
-df_hub.createOrReplaceTempView("_hub_staging")
+unified.createOrReplaceTempView("_hub_staging")
 
-update_set = ",\n        ".join(
-    [f"t.`{c}` = s.`{c}`" for c in attr_cols + ["record_source", "dv_hashdiff", "load_date"]]
-)
-
-insert_cols   = ", ".join([f"`{c}`" for c in hub_columns])
-insert_values = ", ".join([f"s.`{c}`" for c in hub_columns])
+# Columnas a actualizar en MATCHED (todo excepto la PK surrogate y la BK)
+update_cols = [
+    c for c in unified.columns
+    if c not in ("pk_hub_cliente", BK_COLUMN)
+]
+update_set    = ",\n        ".join([f"tgt.`{c}` = src.`{c}`" for c in update_cols])
+insert_cols   = ", ".join([f"`{c}`" for c in unified.columns])
+insert_values = ", ".join([f"src.`{c}`" for c in unified.columns])
 
 merge_sql = f"""
-MERGE INTO {HUB_CLIENTE} AS t
-USING _hub_staging AS s
-  ON t.bk_cliente = s.bk_cliente
-WHEN MATCHED AND t.dv_hashdiff <> s.dv_hashdiff THEN
+MERGE INTO {HUB_TABLE} AS tgt
+USING _hub_staging AS src
+  ON tgt.`{BK_COLUMN}` = src.`{BK_COLUMN}`
+WHEN MATCHED THEN
   UPDATE SET
         {update_set}
 WHEN NOT MATCHED THEN
@@ -307,68 +182,72 @@ WHEN NOT MATCHED THEN
 """
 
 print("Ejecutando MERGE...\n")
-print(merge_sql)
-
-merge_result = spark.sql(merge_sql)
+spark.sql(merge_sql)
 spark.catalog.dropTempView("_hub_staging")
+print("  MERGE completado.")
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Bloque 9 — Validación post-carga
+# MAGIC ## Bloque 6 — Validaciones post-carga
 
 print("=" * 65)
 print("  VALIDACIÓN POST-CARGA")
 print("=" * 65)
 
-hub_count = spark.sql(f"SELECT COUNT(*) AS n FROM {HUB_CLIENTE}").collect()[0]["n"]
-src_count = df_hub.count()
+hub_count = spark.sql(f"SELECT COUNT(*) AS n FROM {HUB_TABLE}").collect()[0]["n"]
 
 null_bk = spark.sql(f"""
-    SELECT COUNT(*) AS n FROM {HUB_CLIENTE}
-    WHERE bk_cliente IS NULL OR TRIM(bk_cliente) = ''
+    SELECT COUNT(*) AS n FROM {HUB_TABLE}
+    WHERE `{BK_COLUMN}` IS NULL OR TRIM(`{BK_COLUMN}`) = ''
 """).collect()[0]["n"]
 
 dup_bk = spark.sql(f"""
     SELECT COUNT(*) AS n FROM (
-        SELECT bk_cliente FROM {HUB_CLIENTE}
-        GROUP BY bk_cliente HAVING COUNT(*) > 1
+        SELECT `{BK_COLUMN}` FROM {HUB_TABLE}
+        GROUP BY `{BK_COLUMN}` HAVING COUNT(*) > 1
     )
 """).collect()[0]["n"]
 
-print(f"\n  Filas en staging (fuente)     : {src_count:>10,}")
-print(f"  Filas en {HUB_TABLE:<22}: {hub_count:>10,}")
-print(f"  BK nulos o vacíos             : {null_bk:>10,}  {'✓' if null_bk == 0 else '✗ REVISAR'}")
-print(f"  BK duplicados                 : {dup_bk:>10,}   {'✓' if dup_bk == 0 else '✗ REVISAR'}")
+null_fecha = spark.sql(f"""
+    SELECT COUNT(*) AS n FROM {HUB_TABLE}
+    WHERE fecha_creacion IS NULL
+""").collect()[0]["n"]
 
-# Cobertura por sistema origen
-print("\n  Distribución por record_source:")
+print(f"\n  Filas staging (fuente)        : {total_dedup:>10,}")
+print(f"  Filas en HUB tras MERGE       : {hub_count:>10,}")
+print(f"  BK ({BK_COLUMN}) nulos        : {null_bk:>10,}   {'✓' if null_bk == 0 else '✗ REVISAR'}")
+print(f"  BK duplicados                 : {dup_bk:>10,}   {'✓' if dup_bk == 0 else '✗ REVISAR'}")
+print(f"  Nulos en fecha_creacion       : {null_fecha:>10,}   {'✓' if null_fecha == 0 else '✗ REVISAR'}")
+
+print("\n  Distribución por satélite:")
 spark.sql(f"""
-    SELECT record_source, COUNT(*) AS filas
-    FROM {HUB_CLIENTE}
-    GROUP BY record_source
+    SELECT satelite, COUNT(*) AS filas
+    FROM {HUB_TABLE}
+    GROUP BY satelite
     ORDER BY filas DESC
 """).show(truncate=False)
 
-# Muestra de registros cargados
-print("  Muestra (10 filas):")
-display(spark.sql(f"SELECT * FROM {HUB_CLIENTE} LIMIT 10"))
-
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Bloque 10 — Resumen ejecutivo
-
-status_bk   = "OK" if null_bk == 0 else "ERROR"
-status_dup  = "OK" if dup_bk  == 0 else "ERROR"
-overall     = "OK" if status_bk == "OK" and status_dup == "OK" else "CON ADVERTENCIAS"
+# MAGIC ## Bloque 7 — Resumen ejecutivo
 
 import pandas as pd
 
+status_bk    = "OK" if null_bk    == 0 else "ERROR"
+status_dup   = "OK" if dup_bk     == 0 else "ERROR"
+status_fecha = "OK" if null_fecha  == 0 else "ERROR"
+overall      = "OK" if all(s == "OK" for s in [status_bk, status_dup, status_fecha]) else "CON ADVERTENCIAS"
+
 summary = pd.DataFrame([
-    {"Validación": "BK sin nulos",        "Resultado": status_bk,  "Detalle": f"{null_bk} nulos encontrados"},
-    {"Validación": "BK sin duplicados",   "Resultado": status_dup, "Detalle": f"{dup_bk} duplicados encontrados"},
-    {"Validación": "Filas en HUB",        "Resultado": "INFO",     "Detalle": f"{hub_count:,} registros"},
-    {"Validación": "Timestamp de carga",  "Resultado": "INFO",     "Detalle": LOAD_TIMESTAMP},
+    {"Validación": "BK sin nulos",       "Resultado": status_bk,    "Detalle": f"{null_bk} nulos"},
+    {"Validación": "BK sin duplicados",  "Resultado": status_dup,   "Detalle": f"{dup_bk} duplicados"},
+    {"Validación": "fecha_creacion OK",  "Resultado": status_fecha, "Detalle": f"{null_fecha} nulos"},
+    {"Validación": "Filas en HUB",       "Resultado": "INFO",       "Detalle": f"{hub_count:,} registros"},
+    {"Validación": "Timestamp de carga", "Resultado": "INFO",       "Detalle": LOAD_TS},
 ])
 
-print(f"\n  Estado general de la carga: {overall}\n")
+print(f"\n  Estado general: {overall}\n")
 display(spark.createDataFrame(summary))
+
+print("\n  Muestra del HUB (10 filas):")
+display(spark.sql(f"SELECT * FROM {HUB_TABLE} LIMIT 10"))
