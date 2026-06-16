@@ -159,25 +159,23 @@ df_rules.show(5, truncate=60)
 # MAGIC %md
 # MAGIC ## Bloque 3 — Crear tabla si no existe
 
-def table_exists(tbl):
-    try:
-        spark.sql(f"DESCRIBE TABLE {tbl}")
-        return True
-    except Exception:
-        return False
-
-if not table_exists(TARGET):
-    df_rules.limit(0).createOrReplaceTempView("_reglas_schema_ref")
+df_rules.limit(0).createOrReplaceTempView("_reglas_schema_ref")
+try:
     spark.sql(f"""
         CREATE TABLE {TARGET}
         USING DELTA
         TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
         AS SELECT * FROM _reglas_schema_ref
     """)
-    spark.catalog.dropTempView("_reglas_schema_ref")
     print("Tabla creada.")
-else:
-    print("Tabla ya existe — se usará MERGE.")
+except Exception as e:
+    msg = str(e).upper()
+    if "ALREADY_EXISTS" in msg or "ALREADY EXISTS" in msg:
+        print("Tabla ya existe — se usará MERGE.")
+    else:
+        raise
+finally:
+    spark.catalog.dropTempView("_reglas_schema_ref")
 
 # COMMAND ----------
 # MAGIC %md
