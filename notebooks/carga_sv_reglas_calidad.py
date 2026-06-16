@@ -37,20 +37,20 @@ print(f"Inicio  : {LOAD_TS}")
 # MAGIC  hash_registro, fecha_creacion`
 
 SCHEMA = StructType([
-    StructField("sk_regla_calidad",   LongType(),    False),
-    StructField("pk_regla_calidad",   StringType(),  False),
-    StructField("tabla",              StringType(),  True),
-    StructField("atributo",           StringType(),  True),
-    StructField("tipo_regla",         StringType(),  True),
-    StructField("regla",              StringType(),  True),
-    StructField("grupo_regla",        StringType(),  True),
-    StructField("prioridad_regla",    IntegerType(), True),
-    StructField("estado_regla",       IntegerType(), True),
-    StructField("fecha_ini_vigencia", DateType(),    True),
-    StructField("fecha_fin_vigencia", DateType(),    True),
-    StructField("fecha_actualizacion",DateType(),    True),
-    StructField("hash_registro",      StringType(),  True),
-    StructField("fecha_creacion",     DateType(),    True),
+    StructField("sk_regla_calidad",    LongType(),    False),
+    StructField("pk_regla_calidad",    StringType(),  False),
+    StructField("tabla",               StringType(),  True),
+    StructField("atributo",            StringType(),  True),
+    StructField("tipo_regla",          StringType(),  True),
+    StructField("regla",               StringType(),  True),
+    StructField("grupo_regla",         StringType(),  True),
+    StructField("prioridad_regla",     IntegerType(), True),   # int en RAW_DATA
+    StructField("estado_regla",        IntegerType(), True),   # int en RAW_DATA
+    StructField("fecha_ini_vigencia",  StringType(),  True),   # se castea a DateType abajo
+    StructField("fecha_fin_vigencia",  StringType(),  True),
+    StructField("fecha_actualizacion", StringType(),  True),
+    StructField("hash_registro",       StringType(),  True),
+    StructField("fecha_creacion",      StringType(),  True),
 ])
 
 RAW_DATA = [
@@ -142,6 +142,16 @@ RAW_DATA = [
 ]
 
 df_rules = spark.createDataFrame(RAW_DATA, schema=SCHEMA)
+
+# Castear columnas de fecha de STRING → DATE
+df_rules = (
+    df_rules
+    .withColumn("fecha_ini_vigencia",  F.to_date(F.col("fecha_ini_vigencia"),  "yyyy-MM-dd"))
+    .withColumn("fecha_fin_vigencia",  F.to_date(F.col("fecha_fin_vigencia"),  "yyyy-MM-dd"))
+    .withColumn("fecha_actualizacion", F.to_date(F.col("fecha_actualizacion"), "yyyy-MM-dd"))
+    .withColumn("fecha_creacion",      F.to_date(F.col("fecha_creacion"),      "yyyy-MM-dd"))
+)
+
 print(f"Reglas preparadas: {df_rules.count()}")
 df_rules.show(5, truncate=60)
 
