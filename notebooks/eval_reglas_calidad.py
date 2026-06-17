@@ -30,7 +30,7 @@ SAT_SALUD = "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`"
 SAT_PYC   = "`uc-axa-cli`.`silver`.`sv_sat_pyc`"
 HUB_TABLE = "`uc-axa-cli`.`silver`.`sv_hub_clientes`"
 
-REGLAS_TABLE = "`uc-axa-cli`.`silver`.`sv_reglas_calidad`"
+REGLAS_TABLE = "`uc-axa-cli`.`silver`.`reglas_calidad`"
 FACT_TABLE   = "`uc-axa-cli`.`gold`.`fact_reporte_de_calidad`"
 
 HOY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
