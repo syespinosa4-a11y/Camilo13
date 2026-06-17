@@ -31,7 +31,7 @@ SAT_PYC   = "`uc-axa-cli`.`silver`.`sv_sat_pyc`"
 HUB_TABLE = "`uc-axa-cli`.`silver`.`sv_hub_clientes`"
 
 REGLAS_TABLE = "`uc-axa-cli`.`silver`.`reglas_calidad`"
-FACT_TABLE   = "`uc-axa-cli`.`gold`.`fact_reporte_de_calidad`"
+FACT_TABLE   = "`uc-axa-cli`.`gold`.`fact_reporte_calidad`"
 
 HOY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -280,6 +280,43 @@ def atributos_requeridos(regla_sql: str):
     return [attr for attr in CANONICAL_ATTRS if WORD_RE_CACHE[attr].search(regla_sql)]
 
 
+def _fix_in_list(m):
+    inner = m.group(1)
+    items = [it.strip() for it in inner.split(",")]
+    fixed = []
+    for it in items:
+        if it == "":
+            fixed.append("''")
+        elif it.upper() == "NULL":
+            fixed.append("NULL")
+        elif re.match(r"^-?\d+(\.\d+)?$", it):
+            fixed.append(it)
+        elif it.startswith("'") and it.endswith("'"):
+            fixed.append(it)
+        else:
+            fixed.append("'" + it.replace("'", "''") + "'")
+    return "IN (" + ", ".join(fixed) + ")"
+
+
+def _fix_pattern(m):
+    kw = m.group(1)
+    pattern = m.group(2).strip()
+    if pattern.startswith("'") and pattern.endswith("'"):
+        return f"{kw} {pattern}"
+    return f"{kw} '" + pattern.replace("'", "''") + "'"
+
+
+def reparar_comillas(regla_sql: str) -> str:
+    """Repara en memoria literales sin comillas en IN(...)/LIKE/RLIKE,
+    sin modificar la tabla de origen (la columna 'regla' sigue corrupta)."""
+    sql = re.sub(r"IN\s*\(([^)]*)\)", _fix_in_list, regla_sql, flags=re.IGNORECASE)
+    sql = re.sub(
+        r"\b(RLIKE|LIKE)\s+([^()]+?)(?=\s+(?:OR|AND|THEN)\b|\)|$)",
+        _fix_pattern, sql, flags=re.IGNORECASE,
+    )
+    return sql
+
+
 REGLAS = []
 for r in reglas_raw:
     pk_norm = r["pk_regla_calidad"].replace(" ", "")
@@ -287,7 +324,7 @@ for r in reglas_raw:
     REGLAS.append({
         "pk_regla_calidad": pk_norm,
         "grupo_regla": r["grupo_regla"],
-        "regla_sql": r["regla"],
+        "regla_sql": reparar_comillas(r["regla"]),
         "atributos_requeridos": req,
         "atributo_principal": req[0] if req else None,
     })
