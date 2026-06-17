@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 spark = SparkSession.builder.getOrCreate()
 
-TARGET = "`uc-axa-cli`.`silver`.`sv_reglas_calidad`"
+TARGET = "`uc-axa-cli`.`silver`.`reglas_calidad`"
 LOAD_TS = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 print(f"Destino : {TARGET}")
@@ -187,7 +187,7 @@ spark.sql(f"""
 MERGE INTO {TARGET} AS tgt
 USING _reglas_staging AS src
   ON tgt.pk_regla_calidad = src.pk_regla_calidad
-WHEN MATCHED AND tgt.hash_registro <> src.hash_registro THEN
+WHEN MATCHED THEN
   UPDATE SET
     tgt.tabla               = src.tabla,
     tgt.atributo            = src.atributo,
