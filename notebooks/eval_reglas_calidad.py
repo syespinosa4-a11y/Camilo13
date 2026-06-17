@@ -268,7 +268,7 @@ for fuente, cfg in FUENTES.items():
 # MAGIC ## Bloque 4 — Carga de reglas y detección de atributos requeridos
 
 reglas_raw = spark.sql(f"""
-    SELECT pk_regla_calidad, atributo, tipo_regla, regla
+    SELECT pk_regla_calidad, atributo, grupo_regla, regla
     FROM {REGLAS_TABLE}
     WHERE estado_regla = 1
 """).collect()
@@ -286,7 +286,7 @@ for r in reglas_raw:
     req = atributos_requeridos(r["regla"])
     REGLAS.append({
         "pk_regla_calidad": pk_norm,
-        "tipo_regla": r["tipo_regla"],
+        "grupo_regla": r["grupo_regla"],
         "regla_sql": r["regla"],
         "atributos_requeridos": req,
         "atributo_principal": req[0] if req else None,
@@ -325,7 +325,7 @@ for regla in REGLAS:
             continue
 
         try:
-            if regla["tipo_regla"] == "Tabla":
+            if regla["grupo_regla"] == "Unicidad":
                 partition_cols = ", ".join(regla["atributos_requeridos"])
                 sql = f"""
                     SELECT
