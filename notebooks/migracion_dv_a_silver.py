@@ -2,17 +2,17 @@
 # NTT DATA 2026
 # Migración de tablas a los satélites — Data Vault
 # MAGIC %md
-# MAGIC # Migración de satélites: axa_col_dv → uc-axa-cli.silver
+# MAGIC # Migración de satélites: axa_col_dv → uc_axa_cli.silver
 # MAGIC
 # MAGIC Cada satélite acumula TODAS las tablas fuente de su sistema origen,
 # MAGIC unidas horizontalmente (UNION ALL con mergeSchema).
 # MAGIC Columnas ausentes en alguna fuente se rellenan con NULL.
 # MAGIC
-# MAGIC | Satélite destino                         | Fuentes | Sistema  |
-# MAGIC |------------------------------------------|---------|----------|
-# MAGIC | uc-axa-cli.silver.sv_sat_arl             | 6       | AS400    |
-# MAGIC | uc-axa-cli.silver.sv_sat_beyond_health   | 7       | BH       |
-# MAGIC | uc-axa-cli.silver.sv_sat_pyc             | 16      | SISE     |
+# MAGIC | Satélite destino                       | Fuentes | Sistema  |
+# MAGIC |-----------------------------------------|---------|----------|
+# MAGIC | uc_axa_cli.silver.sat_arl               | 6       | AS400    |
+# MAGIC | uc_axa_cli.silver.sat_beyond_health     | 7       | BH       |
+# MAGIC | uc_axa_cli.silver.sat_pyc               | 16      | SISE     |
 
 # COMMAND ----------
 # MAGIC %md
@@ -21,138 +21,138 @@
 # Cada entrada: fuente → satélite destino
 MIGRATION_MAP = [
 
-    # ── sv_sat_arl  ←  core_as400 : 6 tablas ────────────────────────────────
+    # ── sat_arl  ←  core_as400 : 6 tablas ────────────────────────────────
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaempaf0`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
+        "target": "`uc_axa_cli`.`silver`.`sat_arl`",
     },
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaafaaf0`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
+        "target": "`uc_axa_cli`.`silver`.`sat_arl`",
     },
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaafnaf0`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
+        "target": "`uc_axa_cli`.`silver`.`sat_arl`",
     },
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaciuaf0`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
+        "target": "`uc_axa_cli`.`silver`.`sat_arl`",
     },
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aaicoaf0`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
+        "target": "`uc_axa_cli`.`silver`.`sat_arl`",
     },
     {
         "source": "`axa_col_dv`.`core_as400`.`as_arafild0_aacenaf0`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_arl`",
+        "target": "`uc_axa_cli`.`silver`.`sat_arl`",
     },
 
-    # ── sv_sat_beyond_health  ←  core_bh : 7 tablas ─────────────────────────
+    # ── sat_beyond_health  ←  core_bh : 7 tablas ─────────────────────────
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_person`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_address`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_institution`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_country`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_city`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_affiliation_contract`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
     {
         "source": "`axa_col_dv`.`core_bh`.`bh_sa_member`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_beyond_health`",
+        "target": "`uc_axa_cli`.`silver`.`sat_beyond_health`",
     },
 
-    # ── sv_sat_pyc  ←  core_sise : 16 tablas ────────────────────────────────
+    # ── sat_pyc  ←  core_sise : 16 tablas ────────────────────────────────
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_mpersona`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_maseg_header`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_mpersona_dir`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_mpersona_telef`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_tmunicipio`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sg_mpersona_aut_datos`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_tpais`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_tciuu`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_tdpto`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_magente`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sv_pv_header`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sv_tramo`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sg_pv_header`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sg_tramo`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sv_di_header`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sg_di_header`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
     {
         "source": "`axa_col_dv`.`core_sise`.`ss_sg_di_benef`",
-        "target": "`uc-axa-cli`.`silver`.`sv_sat_pyc`",
+        "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
 ]
 
 # PK de cada satélite
 TARGET_ID_MAP = {
-    "sv_sat_arl":           "id_sat_arl",
-    "sv_sat_beyond_health": "id_sat_beyond_health",
-    "sv_sat_pyc":           "id_sat_pyc",
+    "sat_arl":           "id_sat_arl",
+    "sat_beyond_health": "id_sat_beyond_health",
+    "sat_pyc":           "id_sat_pyc",
 }
 
 # COMMAND ----------
