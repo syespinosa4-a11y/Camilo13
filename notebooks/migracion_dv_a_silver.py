@@ -170,6 +170,34 @@ spark = SparkSession.builder.getOrCreate()
 LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _short_error(e: Exception) -> str:
+    """
+    Extrae solo la línea relevante del error, sin el stack trace completo
+    de Java/Spark (que puede tener cientos de líneas).
+    """
+    text = str(e)
+    first_line = text.strip().splitlines()[0] if text.strip() else text
+    # Si el mensaje real viene después de un prefijo de excepción Java,
+    # nos quedamos con la primera línea (suele contener el código de error,
+    # p.ej. [UNAUTHORIZED_ACCESS] o [TABLE_OR_VIEW_NOT_FOUND]).
+    return first_line[:400]
+
+
+def _is_permission_error(e: Exception) -> bool:
+    text = str(e).upper()
+    keywords = [
+        "UNAUTHORIZED_ACCESS",
+        "PERMISSION_DENIED",
+        "ACCESS_DENIED",
+        "FORBIDDEN",
+        "403",
+        "AUTHORIZATIONFAILURE",
+        "DOES NOT HAVE PERMISSION",
+        "ROW FILTER OR COLUMN MASK",
+    ]
+    return any(k in text for k in keywords)
+
+
 def table_exists(table_sql: str) -> bool:
     try:
         spark.sql(f"DESCRIBE TABLE {table_sql}")
@@ -232,8 +260,14 @@ def union_all_sources(sources: list) -> "DataFrame":
             dfs.append(df)
             print(f"    ✓ leída  {source}  ({df.count():,} filas)")
         except Exception as e:
-            failed.append({"source": source, "error": str(e)})
-            print(f"    ✗ ERROR  {source}  → {e}")
+            es_permiso = _is_permission_error(e)
+            failed.append({
+                "source": source,
+                "error": _short_error(e),
+                "permiso_denegado": es_permiso,
+            })
+            motivo = "SIN PERMISOS" if es_permiso else "ERROR"
+            print(f"    ✗ {motivo}  {source}  → {_short_error(e)}")
 
     if not dfs:
         raise RuntimeError("Ninguna tabla fuente pudo leerse.")
@@ -327,8 +361,8 @@ def migrate_satellite(target: str, sources: list) -> dict:
         except Exception:
             pass
         result["status"] = "ERROR"
-        result["error"]  = str(exc)
-        print(f"\n  ✗ {target}  ERROR: {exc}")
+        result["error"]  = _short_error(exc)
+        print(f"\n  ✗ {target}  ERROR: {_short_error(exc)}")
 
     return result
 
@@ -366,13 +400,16 @@ import pandas as pd
 
 rows_summary = []
 for r in log:
+    errores = r.get("errors", [])
+    sin_permiso = sum(1 for e in errores if e.get("permiso_denegado"))
     rows_summary.append({
         "target":   r["target"],
         "status":   r["status"],
         "filas":    str(r["rows"]) if r.get("rows") is not None else "",
         "columnas": str(r["cols"]) if r.get("cols") is not None else "",
-        "fuentes_ok":    str(r["sources"] - len(r.get("errors", []))),
-        "fuentes_error": str(len(r.get("errors", []))),
+        "fuentes_ok":         str(r["sources"] - len(errores)),
+        "fuentes_error":      str(len(errores)),
+        "fuentes_sin_permiso": str(sin_permiso),
         "timestamp": r["timestamp"],
     })
 
@@ -391,13 +428,23 @@ display(spark.createDataFrame(summary_df.fillna("")))
 # MAGIC ## Bloque 5 — Detalle de fuentes con error por satélite
 
 for r in log:
-    if r.get("errors"):
+    errores = r.get("errors", [])
+    if errores:
         print(f"\n── Fuentes fallidas en {r['target']} ──")
-        for e in r["errors"]:
-            print(f"  Fuente : {e['source']}")
-            print(f"  Error  : {e['error']}")
-            if "row filter or column mask" in e["error"]:
-                print("  ► Acción: el administrador de UC debe remover el row filter/column mask.")
+        sin_permiso = [e for e in errores if e.get("permiso_denegado")]
+        otros       = [e for e in errores if not e.get("permiso_denegado")]
+
+        if sin_permiso:
+            print(f"  SIN PERMISOS ({len(sin_permiso)}) — no se migraron, requieren acceso:")
+            for e in sin_permiso:
+                print(f"    - {e['source']}")
+                print(f"      {e['error']}")
+
+        if otros:
+            print(f"  OTROS ERRORES ({len(otros)}):")
+            for e in otros:
+                print(f"    - {e['source']}")
+                print(f"      {e['error']}")
 
 if all(not r.get("errors") for r in log):
     print("  Todas las fuentes se leyeron correctamente.")
