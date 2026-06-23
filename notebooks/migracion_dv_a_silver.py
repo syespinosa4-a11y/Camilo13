@@ -161,6 +161,7 @@ TARGET_ID_MAP = {
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from delta.tables import DeltaTable
 from datetime import datetime, timezone
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -212,12 +213,8 @@ def _is_permission_error(e: Exception) -> bool:
     return any(k in text for k in keywords)
 
 
-def table_exists(table_sql: str) -> bool:
-    try:
-        spark.sql(f"DESCRIBE TABLE {table_sql}")
-        return True
-    except Exception:
-        return False
+def table_exists(table_name: str) -> bool:
+    return spark.catalog.tableExists(table_name)
 
 
 def get_id_col(target: str) -> str:
@@ -227,16 +224,18 @@ def get_id_col(target: str) -> str:
 
 def read_source(source: str):
     """
-    Lee la tabla fuente convirtiendo todo a STRING.
-    Estrategia 1: SQL + TRY_CAST.
-    Estrategia 2: Parquet por path (fallback sin row filters).
+    Lee la tabla fuente convirtiendo todo a STRING, usando solo la API de
+    DataFrame (sin sentencias SQL).
+    Estrategia 1: spark.table(...) + try_cast columna por columna.
+    Estrategia 2: lectura directa de archivos Parquet (fallback).
     """
-    sql_error = None
+    catalog_error = None
     try:
-        cols = spark.sql(f"SELECT * FROM {source} LIMIT 0").columns
-        cast_exprs = ", ".join([f"TRY_CAST(`{c}` AS STRING) AS `{c}`" for c in cols])
-        df = spark.sql(f"SELECT {cast_exprs} FROM {source}")
-        # IMPORTANTE: se valida con COUNT(*) (escaneo completo), no con
+        raw = spark.table(source)
+        df = raw.select(
+            [F.try_cast(F.col(c), "string").alias(c) for c in raw.columns]
+        )
+        # IMPORTANTE: se valida con COUNT() (escaneo completo), no con
         # LIMIT(1). Algunas columnas tienen máscaras de Unity Catalog que
         # devuelven un placeholder de redacción (p. ej. '***' o 'XXXXXXX')
         # incompatible con el tipo real de la columna; ese placeholder solo
@@ -248,19 +247,22 @@ def read_source(source: str):
         df.count()
         return df
     except Exception as e:
-        sql_error = e
+        catalog_error = e
 
     try:
-        location = spark.sql(
-            f"DESCRIBE DETAIL {source}"
-        ).select("location").collect()[0][0]
+        location = (
+            DeltaTable.forName(spark, source)
+            .detail()
+            .select("location")
+            .collect()[0][0]
+        )
         df = spark.read.option("mergeSchema", "true").format("parquet").load(location)
         for c in df.columns:
             df = df.withColumn(c, F.col(c).cast("string"))
         df.count()
         return df
     except Exception:
-        raise sql_error
+        raise catalog_error
 
 
 def _read_one(source: str):
@@ -340,20 +342,13 @@ def migrate_satellite(target: str, sources: list) -> dict:
         "timestamp": datetime.now().isoformat(timespec="seconds"),
     }
 
-    table_name = target.split(".")[-1].strip("`")
-    schema_sql  = target.rsplit(".", 1)[0]
-    tmp_target  = f"{schema_sql}.`_tmp_{table_name}`"
-    bak_target  = f"{schema_sql}.`_bak_{table_name}`"
-    temp_view   = f"_vw_{table_name}"
-    id_col      = get_id_col(target)
+    id_col = get_id_col(target)
 
     # Estado por fuente individual (independiente del estado del satélite):
     # se inicializa OK para todas y se corrige según lo que pase.
     result["source_status"] = {s: {"status": "OK", "error": ""} for s in sources}
 
     try:
-        spark.sql(f"DROP TABLE IF EXISTS {tmp_target}")
-
         print(f"\n  Leyendo {len(sources)} fuentes para {target}...")
         combined, failed = union_all_sources(sources)
         result["errors"] = failed
@@ -398,29 +393,20 @@ def migrate_satellite(target: str, sources: list) -> dict:
             shuffle_partitions = 200
         combined = combined.repartition(shuffle_partitions)
 
-        # Escribir en temporal — particionada por fuente.
-        combined.createOrReplaceTempView(temp_view)
-        spark.sql(
-            f"CREATE TABLE {tmp_target} "
-            f"PARTITIONED BY (dv_record_source) "
-            f"AS SELECT * FROM {temp_view}"
+        # Escritura atómica directa al destino con createOrReplace() (API
+        # de DataFrame, sin SQL): reemplaza por completo la tabla destino
+        # en una sola operación, sin necesidad de tabla temporal + RENAME.
+        (
+            combined.writeTo(target)
+            .using("delta")
+            .partitionedBy(F.col("dv_record_source"))
+            .createOrReplace()
         )
-        spark.catalog.dropTempView(temp_view)
 
         # Conteo y columnas a partir de la tabla YA escrita (un solo scan,
         # en vez de recomputar todo el DAG de lectura/unión otra vez).
-        row_count = spark.sql(f"SELECT COUNT(*) AS n FROM {tmp_target}").collect()[0]["n"]
-        col_count = len(spark.table(tmp_target).columns)
-
-        # Swap atómico: temporal → destino
-        if table_exists(target):
-            spark.sql(f"DROP TABLE IF EXISTS {bak_target}")
-            spark.sql(f"ALTER TABLE {target} RENAME TO {bak_target}")
-
-        spark.sql(f"ALTER TABLE {tmp_target} RENAME TO {target}")
-
-        if table_exists(bak_target):
-            spark.sql(f"DROP TABLE IF EXISTS {bak_target}")
+        row_count = spark.table(target).count()
+        col_count = len(spark.table(target).columns)
 
         result["status"] = "OK"
         result["rows"]   = row_count
@@ -432,10 +418,6 @@ def migrate_satellite(target: str, sources: list) -> dict:
             print(f"    Fuentes con error: {len(failed)}/{len(sources)}")
 
     except Exception as exc:
-        try:
-            spark.sql(f"DROP TABLE IF EXISTS {tmp_target}")
-        except Exception:
-            pass
         result["status"] = "ERROR"
         result["error"]  = _short_error(exc)
         print(f"\n  ✗ {target}  ERROR: {_short_error(exc)}")
@@ -559,20 +541,23 @@ print("-" * 95)
 
 
 def _count_source(source: str):
-    n = spark.sql(f"SELECT COUNT(*) AS n FROM {source}").collect()[0]["n"]
+    n = spark.table(source).count()
     return source, n
 
 
 for target, sources in satellites.items():
-    # Un solo GROUP BY por satélite (aprovecha el partition pruning de
+    # Un solo groupBy por satélite (aprovecha el partition pruning de
     # PARTITIONED BY dv_record_source) en vez de N consultas filtradas.
     try:
         sat_counts = {
             row["dv_record_source"]: row["n"]
-            for row in spark.sql(
-                f"SELECT dv_record_source, COUNT(*) AS n "
-                f"FROM {target} GROUP BY dv_record_source"
-            ).collect()
+            for row in (
+                spark.table(target)
+                .groupBy("dv_record_source")
+                .count()
+                .withColumnRenamed("count", "n")
+                .collect()
+            )
         }
     except Exception:
         sat_counts = {}
