@@ -248,6 +248,15 @@ def _read_one(source: str):
     """Lee una fuente y le agrega dv_record_source. Lanza la excepción tal cual
     para que el llamador decida cómo clasificarla."""
     df = read_source(source)
+    # Blindaje extra: forzar TODAS las columnas a STRING explícitamente aquí
+    # (no solo dentro de read_source). Si por cualquier motivo una columna
+    # llegó con un tipo distinto de STRING, el unionByName posterior intenta
+    # resolver un tipo común entre fuentes usando CAST normal (no TRY_CAST),
+    # lo que puede reventar con [CAST_INVALID_INPUT] si un valor no es
+    # numérico válido. Re-castear aquí garantiza que TODAS las fuentes ya
+    # tengan tipos idénticos antes de unir, así Spark no necesita inferir
+    # ni convertir nada en el union.
+    df = df.select([F.col(c).cast("string").alias(c) for c in df.columns])
     src_name = source.split(".")[-1].strip("`")
     return df.withColumn("dv_record_source", F.lit(src_name))
 
@@ -344,11 +353,15 @@ def migrate_satellite(target: str, sources: list) -> dict:
             data_cols  = [c for c in combined.columns if c not in audit_cols]
             combined   = combined.select(audit_cols + data_cols)
 
-        # Repartir por dv_record_source ANTES de escribir: alinea las
-        # particiones de escritura con las particiones físicas de la tabla
-        # (PARTITIONED BY dv_record_source), evita un solo task gigante y
-        # acelera las validaciones por fuente del Bloque 7 (partition pruning).
-        combined = combined.repartition("dv_record_source")
+        # NO se hace repartition("dv_record_source") antes de escribir:
+        # las fuentes tienen tamaños muy distintos entre sí (una tabla
+        # maestra grande junto a varias tablas de referencia pequeñas), así
+        # que particionar por esa columna manda TODAS las filas de la fuente
+        # grande a una sola partición/task — exactamente lo que se quedaba
+        # "colgado" sin avanzar. Se deja que Spark/AQE decida el paralelismo
+        # de escritura; Delta sigue escribiendo archivos separados por valor
+        # de dv_record_source gracias al PARTITIONED BY de abajo.
+        combined = combined.repartition(spark.sparkContext.defaultParallelism * 2)
 
         # Escribir en temporal — particionada por fuente.
         combined.createOrReplaceTempView(temp_view)
