@@ -361,7 +361,14 @@ def migrate_satellite(target: str, sources: list) -> dict:
         # "colgado" sin avanzar. Se deja que Spark/AQE decida el paralelismo
         # de escritura; Delta sigue escribiendo archivos separados por valor
         # de dv_record_source gracias al PARTITIONED BY de abajo.
-        combined = combined.repartition(spark.sparkContext.defaultParallelism * 2)
+        # No se usa spark.sparkContext (no existe en Spark Connect /
+        # cómputo serverless): se lee el nivel de paralelismo desde la
+        # configuración SQL, que sí está disponible en ambos modos.
+        try:
+            shuffle_partitions = int(spark.conf.get("spark.sql.shuffle.partitions"))
+        except Exception:
+            shuffle_partitions = 200
+        combined = combined.repartition(shuffle_partitions)
 
         # Escribir en temporal — particionada por fuente.
         combined.createOrReplaceTempView(temp_view)
