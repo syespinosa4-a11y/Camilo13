@@ -236,7 +236,16 @@ def read_source(source: str):
         cols = spark.sql(f"SELECT * FROM {source} LIMIT 0").columns
         cast_exprs = ", ".join([f"TRY_CAST(`{c}` AS STRING) AS `{c}`" for c in cols])
         df = spark.sql(f"SELECT {cast_exprs} FROM {source}")
-        df.limit(1).collect()
+        # IMPORTANTE: se valida con COUNT(*) (escaneo completo), no con
+        # LIMIT(1). Algunas columnas tienen máscaras de Unity Catalog que
+        # devuelven un placeholder de redacción (p. ej. '***' o 'XXXXXXX')
+        # incompatible con el tipo real de la columna; ese placeholder solo
+        # aparece en ciertas filas (no necesariamente la primera), así que
+        # LIMIT(1) no detecta el problema y la falla solo se ve después,
+        # al escribir el satélite completo — tumbando TODO el satélite por
+        # una sola fuente. Forzar el escaneo completo aquí permite excluir
+        # solo esta fuente puntual y dejar que el resto del satélite migre.
+        df.count()
         return df
     except Exception as e:
         sql_error = e
@@ -248,7 +257,7 @@ def read_source(source: str):
         df = spark.read.option("mergeSchema", "true").format("parquet").load(location)
         for c in df.columns:
             df = df.withColumn(c, F.col(c).cast("string"))
-        df.limit(1).collect()
+        df.count()
         return df
     except Exception:
         raise sql_error
