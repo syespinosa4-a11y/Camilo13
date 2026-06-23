@@ -161,13 +161,17 @@ TARGET_ID_MAP = {
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 from datetime import datetime, timezone
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 spark = SparkSession.builder.getOrCreate()
 
 LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+# Número de hilos para leer fuentes en paralelo (cada lectura es un job de
+# Spark independiente; el driver puede despachar varios a la vez).
+MAX_WORKERS = 6
 
 
 def _short_error(e: Exception) -> str:
@@ -240,34 +244,43 @@ def read_source(source: str):
         raise sql_error
 
 
+def _read_one(source: str):
+    """Lee una fuente y le agrega dv_record_source. Lanza la excepción tal cual
+    para que el llamador decida cómo clasificarla."""
+    df = read_source(source)
+    src_name = source.split(".")[-1].strip("`")
+    return df.withColumn("dv_record_source", F.lit(src_name))
+
+
 def union_all_sources(sources: list) -> "DataFrame":
     """
-    Lee todas las tablas fuente de un satélite y las une con UNION ALL.
-    Cada tabla aporta sus propias columnas; las columnas ausentes se
-    rellenan con NULL → el satélite queda con TODAS las columnas de
-    TODAS las fuentes.
-    Agrega 'dv_record_source' para trazabilidad (nombre de la tabla fuente).
+    Lee todas las tablas fuente de un satélite EN PARALELO (hilos) y las une
+    con UNION ALL. Cada tabla aporta sus propias columnas; las columnas
+    ausentes se rellenan con NULL → el satélite queda con TODAS las columnas
+    de TODAS las fuentes.
+    No se hace count() por fuente aquí: forzaría un scan completo extra por
+    cada tabla solo para imprimir un número; el conteo real se obtiene una
+    sola vez, después de escribir el satélite (Bloque 3).
     """
     dfs = []
     failed = []
 
-    for source in sources:
-        try:
-            df = read_source(source)
-            # Nombre corto de la tabla para trazabilidad
-            src_name = source.split(".")[-1].strip("`")
-            df = df.withColumn("dv_record_source", F.lit(src_name))
-            dfs.append(df)
-            print(f"    ✓ leída  {source}  ({df.count():,} filas)")
-        except Exception as e:
-            es_permiso = _is_permission_error(e)
-            failed.append({
-                "source": source,
-                "error": _short_error(e),
-                "permiso_denegado": es_permiso,
-            })
-            motivo = "SIN PERMISOS" if es_permiso else "ERROR"
-            print(f"    ✗ {motivo}  {source}  → {_short_error(e)}")
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(sources))) as pool:
+        future_to_source = {pool.submit(_read_one, s): s for s in sources}
+        for future in as_completed(future_to_source):
+            source = future_to_source[future]
+            try:
+                dfs.append(future.result())
+                print(f"    ✓ leída  {source}")
+            except Exception as e:
+                es_permiso = _is_permission_error(e)
+                failed.append({
+                    "source": source,
+                    "error": _short_error(e),
+                    "permiso_denegado": es_permiso,
+                })
+                motivo = "SIN PERMISOS" if es_permiso else "ERROR"
+                print(f"    ✗ {motivo}  {source}  → {_short_error(e)}")
 
     if not dfs:
         raise RuntimeError("Ninguna tabla fuente pudo leerse.")
@@ -316,25 +329,40 @@ def migrate_satellite(target: str, sources: list) -> dict:
         # Columnas Data Vault de auditoría
         combined = combined.withColumn("dv_load_date", F.lit(LOAD_TS))
 
-        # PK secuencial (primera columna del satélite)
+        # PK secuencial: monotonically_increasing_id() es único y creciente
+        # por partición, SIN necesitar un Window.orderBy() global (que
+        # colapsa TODO el dataset en una sola partición para ordenar y es
+        # el cuello de botella real con tablas grandes). No es estrictamente
+        # consecutivo (puede tener huecos), pero es único — suficiente para
+        # una PK secuencial de auditoría.
         if id_col:
-            window = Window.orderBy(F.monotonically_increasing_id())
             combined = combined.withColumn(
-                id_col,
-                F.row_number().over(window).cast("long")
+                id_col, F.monotonically_increasing_id().cast("long")
             )
             # id_col al frente, luego auditoría, luego el resto
             audit_cols = [id_col, "dv_load_date", "dv_record_source"]
             data_cols  = [c for c in combined.columns if c not in audit_cols]
             combined   = combined.select(audit_cols + data_cols)
 
-        row_count = combined.count()
-        col_count = len(combined.columns)
+        # Repartir por dv_record_source ANTES de escribir: alinea las
+        # particiones de escritura con las particiones físicas de la tabla
+        # (PARTITIONED BY dv_record_source), evita un solo task gigante y
+        # acelera las validaciones por fuente del Bloque 7 (partition pruning).
+        combined = combined.repartition("dv_record_source")
 
-        # Escribir en temporal
+        # Escribir en temporal — particionada por fuente.
         combined.createOrReplaceTempView(temp_view)
-        spark.sql(f"CREATE TABLE {tmp_target} AS SELECT * FROM {temp_view}")
+        spark.sql(
+            f"CREATE TABLE {tmp_target} "
+            f"PARTITIONED BY (dv_record_source) "
+            f"AS SELECT * FROM {temp_view}"
+        )
         spark.catalog.dropTempView(temp_view)
+
+        # Conteo y columnas a partir de la tabla YA escrita (un solo scan,
+        # en vez de recomputar todo el DAG de lectura/unión otra vez).
+        row_count = spark.sql(f"SELECT COUNT(*) AS n FROM {tmp_target}").collect()[0]["n"]
+        col_count = len(spark.table(tmp_target).columns)
 
         # Swap atómico: temporal → destino
         if table_exists(target):
@@ -470,25 +498,44 @@ print("Validación de conteos por tabla fuente vs satélite destino:\n")
 print(f"{'FUENTE':<60} {'SRC':>10}  {'SAT':>12}  {'%':>6}")
 print("-" * 95)
 
+
+def _count_source(source: str):
+    n = spark.sql(f"SELECT COUNT(*) AS n FROM {source}").collect()[0]["n"]
+    return source, n
+
+
 for target, sources in satellites.items():
+    # Un solo GROUP BY por satélite (aprovecha el partition pruning de
+    # PARTITIONED BY dv_record_source) en vez de N consultas filtradas.
     try:
-        sat_total = spark.sql(
-            f"SELECT COUNT(*) AS n FROM {target}"
-        ).collect()[0]["n"]
+        sat_counts = {
+            row["dv_record_source"]: row["n"]
+            for row in spark.sql(
+                f"SELECT dv_record_source, COUNT(*) AS n "
+                f"FROM {target} GROUP BY dv_record_source"
+            ).collect()
+        }
     except Exception:
-        sat_total = 0
+        sat_counts = {}
+
+    # Conteos de fuentes en paralelo.
+    src_counts = {}
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(sources))) as pool:
+        futures = [pool.submit(_count_source, s) for s in sources]
+        for future in as_completed(futures):
+            try:
+                source, n = future.result()
+                src_counts[source] = n
+            except Exception as ex:
+                src_counts[future] = None  # marcado abajo como ERROR
 
     for source in sources:
-        try:
-            src_count = spark.sql(
-                f"SELECT COUNT(*) AS n FROM {source}"
-            ).collect()[0]["n"]
-            src_name = source.split(".")[-1].strip("`")
-            sat_rows_from_src = spark.sql(
-                f"SELECT COUNT(*) AS n FROM {target} WHERE dv_record_source = '{src_name}'"
-            ).collect()[0]["n"]
-            pct = f"{sat_rows_from_src/src_count*100:.1f}%" if src_count > 0 else "N/A"
-            match = "✓" if sat_rows_from_src == src_count else "✗"
-            print(f"{source:<60} {src_count:>10,}  {sat_rows_from_src:>12,}  {match} {pct}")
-        except Exception as ex:
-            print(f"{source:<60} {'ERROR':>10}  {str(ex)[:30]}")
+        src_count = src_counts.get(source)
+        if src_count is None:
+            print(f"{source:<60} {'ERROR':>10}  no se pudo contar la fuente")
+            continue
+        src_name = source.split(".")[-1].strip("`")
+        sat_rows_from_src = sat_counts.get(src_name, 0)
+        pct = f"{sat_rows_from_src/src_count*100:.1f}%" if src_count > 0 else "N/A"
+        match = "✓" if sat_rows_from_src == src_count else "✗"
+        print(f"{source:<60} {src_count:>10,}  {sat_rows_from_src:>12,}  {match} {pct}")
