@@ -167,6 +167,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 spark = SparkSession.builder.getOrCreate()
 
+# Algunas tablas fuente (p. ej. AS400) tienen columnas GENERATED ALWAYS AS
+# (CAST(... AS BIGINT)): ese cast interno se ejecuta con CAST normal (no
+# TRY_CAST) sin importar cómo se consulte la tabla desde afuera, y revienta
+# con [CAST_INVALID_INPUT] si el valor crudo no es numérico válido. Desactivar
+# ANSI a nivel de sesión hace que esos casts devuelvan NULL en vez de abortar.
+try:
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+except Exception:
+    pass
+
 LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 # Número de hilos para leer fuentes en paralelo (cada lectura es un job de
@@ -328,12 +338,21 @@ def migrate_satellite(target: str, sources: list) -> dict:
     temp_view   = f"_vw_{table_name}"
     id_col      = get_id_col(target)
 
+    # Estado por fuente individual (independiente del estado del satélite):
+    # se inicializa OK para todas y se corrige según lo que pase.
+    result["source_status"] = {s: {"status": "OK", "error": ""} for s in sources}
+
     try:
         spark.sql(f"DROP TABLE IF EXISTS {tmp_target}")
 
         print(f"\n  Leyendo {len(sources)} fuentes para {target}...")
         combined, failed = union_all_sources(sources)
         result["errors"] = failed
+        for e in failed:
+            result["source_status"][e["source"]] = {
+                "status": "SIN PERMISO" if e["permiso_denegado"] else "ERROR LECTURA",
+                "error": e["error"],
+            }
 
         # Columnas Data Vault de auditoría
         combined = combined.withColumn("dv_load_date", F.lit(LOAD_TS))
@@ -411,6 +430,17 @@ def migrate_satellite(target: str, sources: list) -> dict:
         result["status"] = "ERROR"
         result["error"]  = _short_error(exc)
         print(f"\n  ✗ {target}  ERROR: {_short_error(exc)}")
+
+        # Si el satélite falla DESPUÉS de leer las fuentes (p. ej. en el
+        # CREATE TABLE / write), ninguna fuente individual quedó marcada
+        # como fallida (todas leyeron OK). Para que la tabla de detalle por
+        # fuente no diga "OK" en fuentes que en realidad no se migraron,
+        # se marcan como fallidas-por-error-de-satélite las que aún seguían
+        # en estado OK.
+        for s, st in result["source_status"].items():
+            if st["status"] == "OK":
+                st["status"] = "ERROR ESCRITURA SATÉLITE"
+                st["error"] = _short_error(exc)
 
     return result
 
@@ -559,3 +589,37 @@ for target, sources in satellites.items():
         pct = f"{sat_rows_from_src/src_count*100:.1f}%" if src_count > 0 else "N/A"
         match = "✓" if sat_rows_from_src == src_count else "✗"
         print(f"{source:<60} {src_count:>10,}  {sat_rows_from_src:>12,}  {match} {pct}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Bloque 8 — Detalle por tabla fuente (OK / ERROR y motivo)
+# MAGIC
+# MAGIC A diferencia del Bloque 4 (que resume por SATÉLITE), esta tabla muestra
+# MAGIC el resultado de CADA tabla fuente individual: si se migró bien, si
+# MAGIC falló por permisos, por error de lectura, o porque el satélite completo
+# MAGIC falló en una etapa posterior (escritura/cast), aunque la fuente en sí
+# MAGIC se haya leído correctamente.
+
+tablas_detalle = []
+for r in log:
+    source_status = r.get("source_status", {})
+    for source, st in source_status.items():
+        src_name = source.split(".")[-1].strip("`")
+        tablas_detalle.append({
+            "tabla_fuente": src_name,
+            "fuente_completa": source,
+            "satelite_destino": r["target"],
+            "status": st["status"],
+            "motivo": st["error"],
+        })
+
+tablas_df = pd.DataFrame(tablas_detalle)
+
+ok_tablas    = sum(1 for t in tablas_detalle if t["status"] == "OK")
+error_tablas = len(tablas_detalle) - ok_tablas
+
+print(f"Tablas migradas correctamente : {ok_tablas}")
+print(f"Tablas con error               : {error_tablas}")
+print(f"Total de tablas fuente         : {len(tablas_detalle)}\n")
+
+display(spark.createDataFrame(tablas_df.fillna("")))
