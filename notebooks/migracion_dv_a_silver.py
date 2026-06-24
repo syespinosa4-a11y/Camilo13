@@ -18,7 +18,12 @@
 # MAGIC %md
 # MAGIC ## Bloque 1 — Configuración
 
-# Cada entrada: fuente → satélite destino
+# Cada entrada: fuente → satélite destino.
+# Por defecto "modo": "UNION" (apilar filas, comportamiento histórico de
+# los 3 satélites actuales). Un satélite puede en cambio declarar
+# "modo": "JOIN" en TODAS sus entradas para combinar columnas de varias
+# fuentes en una sola fila (join horizontal por una columna llave), en
+# vez de apilarlas. Ver join_sources() en el Bloque 2.
 MIGRATION_MAP = [
 
     # ── sat_arl  ←  core_as400 : 6 tablas ────────────────────────────────
@@ -146,6 +151,27 @@ MIGRATION_MAP = [
         "source": "`axa_col_dv`.`core_sise`.`ss_sg_di_benef`",
         "target": "`uc_axa_cli`.`silver`.`sat_pyc`",
     },
+
+    # ── sat_afiliados_360  ←  ejemplo de modo JOIN: 2 fuentes combinadas
+    # por columnas (no apiladas) ──────────────────────────────────────
+    # {
+    #     "source": "`axa_col_dv`.`bronze`.`af_persona`",
+    #     "target": "`uc_axa_cli`.`silver`.`sat_afiliados_360`",
+    #     "modo": "JOIN",
+    #     "orden_join": 1,
+    #     "columna_enlace": "id_persona",
+    #     "tipo_join": "LEFT",
+    #     "prefijo": "per_",
+    # },
+    # {
+    #     "source": "`axa_col_dv`.`bronze`.`af_contacto`",
+    #     "target": "`uc_axa_cli`.`silver`.`sat_afiliados_360`",
+    #     "modo": "JOIN",
+    #     "orden_join": 2,
+    #     "columna_enlace": "id_persona=id_cliente",
+    #     "tipo_join": "LEFT",
+    #     "prefijo": "cto_",
+    # },
 ]
 
 # PK de cada satélite
@@ -282,6 +308,76 @@ def _read_one(source: str):
     return df.withColumn("dv_record_source", F.lit(src_name))
 
 
+def join_sources(entries: list):
+    """
+    Combina varias fuentes EN COLUMNAS (join horizontal) en vez de apilarlas.
+    `entries` viene ordenado por "orden_join": la primera fuente es la base
+    (izquierda); cada fuente siguiente se une a lo acumulado por su
+    "columna_enlace" ("col" si el nombre es igual en ambos lados, o
+    "col_izq=col_der" si difiere) usando "tipo_join" (default LEFT).
+    Cada fuente puede declarar un "prefijo" para sus columnas y evitar
+    colisiones de nombre con las demás fuentes unidas (la columna de enlace
+    nunca se prefija, para poder seguir uniendo por ella).
+    No hay paralelismo aquí: cada join depende del resultado del anterior.
+    """
+    entries_sorted = sorted(entries, key=lambda e: e.get("orden_join", 1))
+    failed = []
+
+    base = entries_sorted[0]
+    try:
+        combined = _read_one(base["source"])
+        prefijo = base.get("prefijo")
+        if prefijo:
+            combined = combined.select([
+                F.col(c).alias(f"{prefijo}{c}") if c != "dv_record_source" else F.col(c)
+                for c in combined.columns
+            ])
+        print(f"    ✓ leída (base JOIN)  {base['source']}")
+    except Exception as e:
+        raise RuntimeError(
+            f"La fuente base del JOIN no pudo leerse: {base['source']} → {_short_error(e)}"
+        ) from e
+
+    for entry in entries_sorted[1:]:
+        source = entry["source"]
+        try:
+            df = read_source(source)
+            df = df.select([F.col(c).cast("string").alias(c) for c in df.columns])
+
+            enlace = entry.get("columna_enlace", "") or ""
+            if "=" in enlace:
+                left_col, right_col = [x.strip() for x in enlace.split("=", 1)]
+            else:
+                left_col = right_col = enlace.strip()
+
+            prefijo = entry.get("prefijo")
+            if prefijo:
+                df = df.select([
+                    F.col(c).alias(f"{prefijo}{c}") if c != right_col else F.col(c)
+                    for c in df.columns
+                ])
+
+            join_type = (entry.get("tipo_join") or "LEFT").lower()
+            combined = combined.join(
+                df, combined[left_col] == df[right_col], how=join_type
+            )
+            if left_col != right_col:
+                combined = combined.drop(df[right_col])
+
+            print(f"    ✓ unida (JOIN {join_type.upper()})  {source}")
+        except Exception as e:
+            es_permiso = _is_permission_error(e)
+            failed.append({
+                "source": source,
+                "error": _short_error(e),
+                "permiso_denegado": es_permiso,
+            })
+            motivo = "SIN PERMISOS" if es_permiso else "ERROR"
+            print(f"    ✗ {motivo}  {source}  → {_short_error(e)}")
+
+    return combined, failed
+
+
 def union_all_sources(sources: list) -> "DataFrame":
     """
     Lee todas las tablas fuente de un satélite EN PARALELO (hilos) y las une
@@ -324,17 +420,26 @@ def union_all_sources(sources: list) -> "DataFrame":
     return combined, failed
 
 
-def migrate_satellite(target: str, sources: list) -> dict:
+def migrate_satellite(target: str, entries: list) -> dict:
     """
-    Migra TODAS las fuentes de un satélite en una sola operación:
-    1. Lee cada fuente (TRY_CAST → Parquet fallback).
-    2. UNION ALL con allowMissingColumns → un DataFrame con todas las columnas.
-    3. Agrega columnas Data Vault: dv_load_date, dv_record_source, PK secuencial.
-    4. Escribe en tabla temporal y hace RENAME atómico al destino.
+    Migra TODAS las fuentes de un satélite en una sola operación. El modo de
+    combinación se decide por entrada (campo "modo" en MIGRATION_MAP, default
+    "UNION"): todas las entradas de un mismo satélite deben compartir el
+    mismo modo.
+      - UNION (default): apila filas de cada fuente (allowMissingColumns).
+      - JOIN: combina columnas de cada fuente en una sola fila, uniendo por
+        "columna_enlace" en el orden de "orden_join" (ver join_sources()).
+    Luego, en ambos modos:
+    1. Agrega columnas Data Vault: dv_load_date, dv_record_source, PK secuencial.
+    2. Escribe directo al destino con writeTo(...).createOrReplace() (atómico).
     """
+    sources = [e["source"] for e in entries]
+    modo = "JOIN" if all((e.get("modo") or "UNION").upper() == "JOIN" for e in entries) else "UNION"
+
     result = {
         "target":    target,
         "sources":   len(sources),
+        "modo":      modo,
         "status":    None,
         "rows":      None,
         "cols":      None,
@@ -349,8 +454,11 @@ def migrate_satellite(target: str, sources: list) -> dict:
     result["source_status"] = {s: {"status": "OK", "error": ""} for s in sources}
 
     try:
-        print(f"\n  Leyendo {len(sources)} fuentes para {target}...")
-        combined, failed = union_all_sources(sources)
+        print(f"\n  Leyendo {len(sources)} fuentes para {target} (modo {modo})...")
+        if modo == "JOIN":
+            combined, failed = join_sources(entries)
+        else:
+            combined, failed = union_all_sources(sources)
         result["errors"] = failed
         for e in failed:
             result["source_status"][e["source"]] = {
@@ -443,10 +551,12 @@ def migrate_satellite(target: str, sources: list) -> dict:
 # MAGIC (y cada una reemplazaba a la anterior), ahora se agrupan TODAS
 # MAGIC las fuentes de cada satélite y se escriben de una sola vez.
 
-# Agrupar entradas del MIGRATION_MAP por target
+# Agrupar entradas del MIGRATION_MAP por target (se conserva la entrada
+# completa, no solo el source, para tener disponible "modo"/"orden_join"/
+# "columna_enlace"/"tipo_join"/"prefijo" en migrate_satellite).
 satellites = defaultdict(list)
 for entry in MIGRATION_MAP:
-    satellites[entry["target"]].append(entry["source"])
+    satellites[entry["target"]].append(entry)
 
 print("=" * 65)
 print(f"  INICIO MIGRACIÓN  {datetime.now().isoformat(timespec='seconds')}")
@@ -454,8 +564,8 @@ print(f"  Satélites a procesar: {len(satellites)}")
 print("=" * 65)
 
 log = []
-for target, sources in satellites.items():
-    log.append(migrate_satellite(target=target, sources=sources))
+for target, entries in satellites.items():
+    log.append(migrate_satellite(target=target, entries=entries))
 
 print("\n" + "=" * 65)
 print(f"  FIN MIGRACIÓN     {datetime.now().isoformat(timespec='seconds')}")
@@ -545,7 +655,16 @@ def _count_source(source: str):
     return source, n
 
 
-for target, sources in satellites.items():
+for target, entries in satellites.items():
+    sources = [e["source"] for e in entries]
+    modo = "JOIN" if all((e.get("modo") or "UNION").upper() == "JOIN" for e in entries) else "UNION"
+    if modo == "JOIN":
+        # En modo JOIN cada fila del satélite combina columnas de varias
+        # fuentes; el conteo fuente-vs-destino fila a fila solo es
+        # comparable contra la fuente base (orden_join=1), las demás
+        # fuentes no aportan filas propias sino columnas adicionales.
+        print(f"\n── {target} (modo JOIN, validación de conteo no aplica fuente por fuente) ──")
+        continue
     # Un solo groupBy por satélite (aprovecha el partition pruning de
     # PARTITIONED BY dv_record_source) en vez de N consultas filtradas.
     try:
