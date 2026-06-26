@@ -114,11 +114,14 @@ def unir_por_entidad(base, tabla, alias: str):
     if llave is None:
         raise ValueError(f"{alias}: no tiene PER_NCODE ni INS_NCODE, no se puede unir por entidad")
     tabla_alias = tabla.withColumn("ID_ENTIDAD_HUB", llave).alias(alias)
-    return base.join(
+    unido = base.join(
         tabla_alias,
         base["ID_ENTIDAD_HUB"] == tabla_alias["ID_ENTIDAD_HUB"],
         "left",
     )
+    # se descarta el ID_ENTIDAD_HUB de tabla_alias: queda duplicado con el de
+    # base y vuelve ambigua cualquier referencia siguiente a la columna.
+    return unido.drop(tabla_alias["ID_ENTIDAD_HUB"])
 
 # COMMAND ----------
 # Join por puente: para tablas que no tienen PER_NCODE/INS_NCODE directo
