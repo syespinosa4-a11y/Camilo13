@@ -1,54 +1,19 @@
 # Databricks notebook source
-# NTT DATA 2026
-# Motor parametrizado de satelites — Data Vault (PySpark puro, sin SQL)
-#
-#  Implementa los lineamientos de Julian:
-#  - Una sola tabla centralizada de parametros (DIM_PARAMETROS), formato
-#    grupo_parametros | nombre | valor | valor_homologado.
-#  - El notebook NO tiene "if satelite == 'sat1': ..." quemado: carga
-#    DIM_PARAMETROS UNA SOLA VEZ en Spark y opera sobre ese DataFrame.
-#  - Cada satelite es un grupo_parametros con estado activo/inactivo,
-#    catalogo/esquema/destino parametrizables, y un "constructor" (nombre
-#    de funcion PySpark registrada) en vez de una query SQL en texto —
-#    esto evita ejecutar SQL dinamico (riesgo de inyeccion) y a la vez
-#    evita el if/elif rigido: agregar un satelite = agregar filas de
-#    parametros + registrar su funcion en CONSTRUCTORES, sin tocar el
-#    bucle principal.
-#
-#  Catalogo de parametrizacion (DIM_PARAMETROS), nombres reservados por
-#  grupo_parametros = sat_<nombre>:
-#    estado          1=activo, 0=inactivo
-#    constructor     nombre de funcion registrada en CONSTRUCTORES
-#    catalogo        catalogo destino (ej. uc_axa_cli)
-#    esquema         esquema destino (ej. silver)
-#    tabla_destino   nombre de tabla destino (ej. sat_beyond_health)
-#    id_columna_pk   nombre de la PK del satelite (ej. id_sat_beyond_health)
-#    catalogo_fuente catalogo de las tablas origen (ej. axa_col_dv)
-#    esquema_fuente  esquema de las tablas origen (ej. core_bh)
-#  Homologaciones (opcionales, libres): nombre = "homologacion_<campo>",
-#  valor = valor crudo, valor_homologado = valor estandar de negocio.
-
-# COMMAND ----------
-#
-#   ## Bloque 1 — Carga de parametros (una sola vez)
-
+# NTT DATA 202
+############################################################################
+### Bloque 1 — Carga de parametros
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
 from datetime import datetime, timezone
 
 spark = SparkSession.builder.getOrCreate()
-
 PARAMS_TABLE = "`uc_axa_cli`.`silver`.`dim_parametros`"
 LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
+#1. Lee DIM_PARAMETROS desde unity catalog y la cachea en memoria, evitando volver a actualizar cada sat. completo
+#Se queda en memoria este df
 def cargar_parametros():
-    """Carga DIM_PARAMETROS UNA SOLA VEZ y cachea el resultado: todos los
-    filtros posteriores se hacen sobre este DataFrame en memoria, nunca
-    con nuevas consultas a la tabla (lineamiento explicito de Julian)."""
     return spark.table(PARAMS_TABLE).cache()
-
-
+#2. Esta función busca una fila puntual (grupo_parametros+nombre) y devuelve un valor. Esta es la función base, de las que #hay dependencia las demás, sin valores hardcodeados, todo sale de la tabla.
 def get_param(df_params, grupo: str, nombre: str, default=None):
     row = (
         df_params
@@ -57,8 +22,8 @@ def get_param(df_params, grupo: str, nombre: str, default=None):
         .first()
     )
     return row[0] if row else default
-
-
+#3. Filtra todas las tablas sat_*= con nombre="estado" y valor= "1", devolviendo la lista de grupos a ejecutar. Aqui se
+#activan o desactivan los sat sin tocar codigo.
 def satelites_activos(df_params) -> list:
     return [
         r["grupo_parametros"]
@@ -74,24 +39,14 @@ def satelites_activos(df_params) -> list:
             .collect()
         )
     ]
-
-
+#4. Arma dinamicamente catalogo_fuente.esquema_fuente.tabla_fisica y con un sparkk.table(....), centraliza el acceso a #tablas de origen, así cada satelite no tendra el nombre de catalogo o esquema escrito a mano.
 def fuente(df_params, grupo: str, tabla_fisica: str) -> "DataFrame":
-    """Lee una tabla origen usando catalogo_fuente/esquema_fuente parametrizados
-    para este grupo (satelite). No hay nombres de catalogo/esquema quemados."""
     catalogo = get_param(df_params, grupo, "catalogo_fuente")
     esquema = get_param(df_params, grupo, "esquema_fuente")
     return spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
-
-# COMMAND ----------
-#
-#   ## Bloque 2 — Constructor: sat_beyond_health (Titulares + Beneficiarios)
-#
-#   Traducido 1:1 desde el script SQL de origen (sin usar spark.sql ni
-#   texto SQL en ningun punto): los CTE (#temp) del SQL pasan a ser
-#   funciones que devuelven DataFrames, y los JOIN/UNION ALL/WHERE se
-#   expresan con la API de DataFrame de PySpark.
-
+############################################################################
+#   ## Bloque 2 — Constructor: sat_beyond_health
+# 1.Filtra y normaliza la tabla de novedades administrativas
 def _bh_novelty_administration(df_params, grupo):
     df = fuente(df_params, grupo, "bh_sa_novelty_administration")
     return (
@@ -102,8 +57,7 @@ def _bh_novelty_administration(df_params, grupo):
         .groupBy("NAD_NPPALOBJECTCODE")
         .agg(F.max("NAD_DPROCESSDATE").alias("NAD_DPROCESSDATE"))
     )
-
-
+# 2.usa W.partición ("MST_NCODE_persona") + F.max("fecha").over(w) para quedarse solo con el último estado de afiliación (equivalente al WHERE x = (SELECT MAX...) correlacionado del SQL).
 def _bh_member_status_latest(df_params, grupo):
     """Equivalente a: where mst_ncode = (select max(mst_ncode) ... group by mem_ncode)."""
     df = fuente(df_params, grupo, "bh_sa_member_status_history")
@@ -113,8 +67,7 @@ def _bh_member_status_latest(df_params, grupo):
         .filter(F.col("MST_NCODE") == F.col("_max_mst"))
         .drop("_max_mst")
     )
-
-
+# 3. hace joins encadenados (address→city→country/dpto) y agrega teléfono/dirección en una sola fila por entidad.
 def _bh_residencial(df_params, grupo):
     ad = fuente(df_params, grupo, "bh_sa_address").filter(F.col("LTY_NCODE") == 1)
     tel = fuente(df_params, grupo, "bh_sa_address_telephone_number")
@@ -131,8 +84,7 @@ def _bh_residencial(df_params, grupo):
             F.max(ciu["CIT_CLEGALCODE"]).alias("ciu_res"),
         )
     )
-
-
+# 4. _bh_titulares y _bh_beneficiarios: construyen el "big dataframe" de cada rol con los joins INNER/LEFT (persona/institución, tipo de identificación con doble alias t/t0, ciudad con doble alias ciu/cit_res).
 def _bh_titulares(df_params, grupo):
     m = fuente(df_params, grupo, "bh_sa_member")
     a = fuente(df_params, grupo, "bh_sa_affiliation_contract")
@@ -190,7 +142,6 @@ def _bh_titulares(df_params, grupo):
         m["MEM_DSTARTINGDATE"].alias("FEC_INI_VIGENCIA"),
     ).distinct()
 
-
 def _bh_beneficiarios(df_params, grupo):
     m = fuente(df_params, grupo, "bh_sa_member")
     a = fuente(df_params, grupo, "bh_sa_affiliation_contract")
@@ -245,8 +196,7 @@ def _bh_beneficiarios(df_params, grupo):
         F.lit("BENEFICIARIO").alias("ROL"),
         m["MEM_DSTARTINGDATE"].alias("FEC_INI_VIGENCIA"),
     ).distinct()
-
-
+# 5. titulares.unionByName(beneficiarios) y ordena por documento — replica el UNION ALL del SQL.
 def build_sat_beyond_health(df_params, grupo):
     """SELECT * FROM #titulares UNION ALL SELECT * FROM #Beneficiario, ordenado
     por tipo y numero de documento."""
@@ -256,9 +206,7 @@ def build_sat_beyond_health(df_params, grupo):
         titulares.unionByName(beneficiarios)
         .orderBy("TIPO_DE_DOCUMENTO", "DOCUMENTO_DE_IDENTIFICACION")
     )
-
-# COMMAND ----------
-#
+#################################################################################################
 #   ## Bloque 3 — Constructor: sat_pyc (SISE) — PRIMER BLOQUE: dedup "ultima
 #   carga" (equivalente a las tablas #1ss_* del script "Generales" SQL).
 #
@@ -268,7 +216,8 @@ def build_sat_beyond_health(df_params, grupo):
 #   email/celular/telefono deduplicados y los 3 roles (Asegurado/Tomador/
 #   Beneficiario) con su UNION final filtrado por Estado='Vigente'. Se
 #   agregan en un siguiente paso una vez se valide este bloque en Databricks.
-
+# 1._sise_ultima_carga(df, claves): helper genérico de dedup por "última carga" — Window.partitionBy(*claves) + max
+###(fecha_cargue) + filtro de igualdad. Se reutiliza en casi todas las 18 funciones _sise_<tabla>.
 def _sise_ultima_carga(df, claves: list):
     """Equivalente a: where a.fecha_cargue = (select max(fecha_cargue) from
     tabla b where <claves coinciden>) — quedarse con el registro mas
@@ -445,8 +394,6 @@ def staging_sat_pyc_generales(df_params, grupo) -> dict:
         "sg_pv_col_categ": _sise_sg_pv_col_categ(df_params, grupo),
     }
 
-# COMMAND ----------
-#
 #   ## Bloque 3b — sat_pyc / Generales: estado de poliza, producto por ramo,
 #   contactos deduplicados y union de los 3 roles (Asegurado/Tomador/
 #   Beneficiario), filtrado a Estado='Vigente' — traduccion 1:1 del script
