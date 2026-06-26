@@ -60,27 +60,36 @@ def cargar_tablas_bh() -> dict:
 # Llave de entidad: coalesce(PER_NCODE, INS_NCODE) detectado por columnas
 # presentes en cada tabla, no por nombre de tabla.
 
+def _mapa_columnas(df):
+    return {c.upper(): c for c in df.columns}
+
+
 def llave_entidad(df):
-    cols = set(df.columns)
-    tiene_per = "PER_NCODE" in cols
-    tiene_ins = "INS_NCODE" in cols
-    if tiene_per and tiene_ins:
-        return F.coalesce(F.col("PER_NCODE").cast("string"), F.col("INS_NCODE").cast("string"))
-    if tiene_per:
-        return F.col("PER_NCODE").cast("string")
-    if tiene_ins:
-        return F.col("INS_NCODE").cast("string")
+    mapa = _mapa_columnas(df)
+    col_per = mapa.get("PER_NCODE")
+    col_ins = mapa.get("INS_NCODE")
+    if col_per and col_ins:
+        return F.coalesce(F.col(col_per).cast("string"), F.col(col_ins).cast("string"))
+    if col_per:
+        return F.col(col_per).cast("string")
+    if col_ins:
+        return F.col(col_ins).cast("string")
     return None
 
 # COMMAND ----------
 # Llave comun entre dos tablas de catalogo (cualquier columna *_NCODE que
-# exista en ambas), para no quemar el nombre puntual de columna.
+# exista en ambas, sin importar mayuscula/minuscula), para no quemar el
+# nombre puntual de columna. Devuelve el nombre real de cada lado, porque
+# el casing puede diferir entre tablas (ej. ACO_NCODE vs aco_ncode).
 
 def llave_comun(izq, der):
-    comunes = [c for c in izq.columns if c in der.columns and c.endswith("NCODE")]
+    mapa_izq = _mapa_columnas(izq)
+    mapa_der = _mapa_columnas(der)
+    comunes = [k for k in mapa_izq if k in mapa_der and k.endswith("NCODE")]
     if not comunes:
         raise ValueError("No se encontro llave comun (*_NCODE) entre las dos tablas")
-    return comunes[0]
+    clave = comunes[0]
+    return mapa_izq[clave], mapa_der[clave]
 
 # COMMAND ----------
 # Universo base de entidades: union de persona e institucion, cada una con
@@ -114,11 +123,11 @@ def unir_por_entidad(base, tabla, alias: str):
 # usando la llave *_NCODE que tengan en comun (detectada dinamicamente, no quemada).
 
 def unir_por_puente(df, alias_referencia: str, tabla_referencia_original, tabla_nueva, alias_nueva: str):
-    llave = llave_comun(tabla_referencia_original, tabla_nueva)
+    llave_izq, llave_der = llave_comun(tabla_referencia_original, tabla_nueva)
     tabla_alias = tabla_nueva.alias(alias_nueva)
     return df.join(
         tabla_alias,
-        df[f"{alias_referencia}.{llave}"] == tabla_alias[llave],
+        df[f"{alias_referencia}.{llave_izq}"] == tabla_alias[llave_der],
         "left",
     )
 
@@ -135,17 +144,17 @@ def build_sat_beyond_health():
 
     ciu = tablas["bh_sa_city"]
     pai = tablas["bh_sa_country"]
-    llave_addr_ciu = llave_comun(tablas["bh_sa_address"], ciu)
-    llave_ciu_pai = llave_comun(ciu, pai)
+    llave_addr, llave_ciu_addr = llave_comun(tablas["bh_sa_address"], ciu)
+    llave_ciu_pai, llave_pai_ciu = llave_comun(ciu, pai)
 
     df = df.join(
         ciu.alias("ciu"),
-        df[f"addr.{llave_addr_ciu}"] == F.col(f"ciu.{llave_addr_ciu}"),
+        df[f"addr.{llave_addr}"] == F.col(f"ciu.{llave_ciu_addr}"),
         "left",
     )
     df = df.join(
         pai.alias("pai"),
-        F.col(f"ciu.{llave_ciu_pai}") == F.col(f"pai.{llave_ciu_pai}"),
+        F.col(f"ciu.{llave_ciu_pai}") == F.col(f"pai.{llave_pai_ciu}"),
         "left",
     )
     return df
