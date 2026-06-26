@@ -165,15 +165,19 @@ def build_sat_beyond_health():
 # conservando la primera con su nombre original.
 
 def deduplicar_columnas(df):
+    # Delta/Spark tratan los nombres de columna sin distinguir mayuscula de
+    # minuscula (ACO_NCODE y aco_ncode son la misma columna al guardar), asi
+    # que la deteccion de duplicados tambien debe ser case-insensitive.
     vistos = {}
     nuevos = []
     for c in df.columns:
-        if c not in vistos:
-            vistos[c] = 0
+        clave = c.upper()
+        if clave not in vistos:
+            vistos[clave] = 0
             nuevos.append(c)
         else:
-            vistos[c] += 1
-            nuevos.append(f"{c}_{vistos[c]}")
+            vistos[clave] += 1
+            nuevos.append(f"{c}_{vistos[clave]}")
     return df.toDF(*nuevos)
 
 # COMMAND ----------
