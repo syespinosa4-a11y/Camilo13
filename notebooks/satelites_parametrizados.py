@@ -93,7 +93,7 @@ def fuente(df_params, grupo: str, tabla_fisica: str) -> "DataFrame":
 #   expresan con la API de DataFrame de PySpark.
 
 def _bh_novelty_administration(df_params, grupo):
-    df = fuente(df_params, grupo, "bh_novelty_administration")
+    df = fuente(df_params, grupo, "bh_sa_novelty_administration")
     return (
         df.filter(F.col("NAD_CMODIFIEDFIELD").isin(
             "Autorización tratamiento de datos",
@@ -106,7 +106,7 @@ def _bh_novelty_administration(df_params, grupo):
 
 def _bh_member_status_latest(df_params, grupo):
     """Equivalente a: where mst_ncode = (select max(mst_ncode) ... group by mem_ncode)."""
-    df = fuente(df_params, grupo, "bh_member_status_history")
+    df = fuente(df_params, grupo, "bh_sa_member_status_history")
     w = Window.partitionBy("MEM_NCODE")
     return (
         df.withColumn("_max_mst", F.max("MST_NCODE").over(w))
@@ -117,7 +117,7 @@ def _bh_member_status_latest(df_params, grupo):
 
 def _bh_residencial(df_params, grupo):
     ad = fuente(df_params, grupo, "bh_sa_address").filter(F.col("LTY_NCODE") == 1)
-    tel = fuente(df_params, grupo, "bh_address_telephone_number")
+    tel = fuente(df_params, grupo, "bh_sa_address_telephone_number")
     ciu = fuente(df_params, grupo, "bh_sa_city")
     joined = (
         ad.join(tel, tel["ADD_NCODE"] == ad["ADD_NCODE"], "left")
@@ -136,12 +136,12 @@ def _bh_residencial(df_params, grupo):
 def _bh_titulares(df_params, grupo):
     m = fuente(df_params, grupo, "bh_sa_member")
     a = fuente(df_params, grupo, "bh_sa_affiliation_contract")
-    pln = fuente(df_params, grupo, "bh_plan")
-    prod = fuente(df_params, grupo, "bh_product")
+    pln = fuente(df_params, grupo, "bh_sa_plan")
+    prod = fuente(df_params, grupo, "bh_sa_product")
     p = fuente(df_params, grupo, "bh_sa_person")
-    t = fuente(df_params, grupo, "bh_identification_type")
+    t = fuente(df_params, grupo, "bh_sa_identification_type")
     i = fuente(df_params, grupo, "bh_sa_institution")
-    t0 = fuente(df_params, grupo, "bh_identification_type")
+    t0 = fuente(df_params, grupo, "bh_sa_identification_type")
     h = _bh_member_status_latest(df_params, grupo)
     re_ = _bh_residencial(df_params, grupo)
     cit_res = fuente(df_params, grupo, "bh_sa_city")
@@ -194,11 +194,11 @@ def _bh_titulares(df_params, grupo):
 def _bh_beneficiarios(df_params, grupo):
     m = fuente(df_params, grupo, "bh_sa_member")
     a = fuente(df_params, grupo, "bh_sa_affiliation_contract")
-    pln = fuente(df_params, grupo, "bh_plan")
-    prod = fuente(df_params, grupo, "bh_product")
+    pln = fuente(df_params, grupo, "bh_sa_plan")
+    prod = fuente(df_params, grupo, "bh_sa_product")
     p = fuente(df_params, grupo, "bh_sa_person")
-    t = fuente(df_params, grupo, "bh_identification_type")
-    mp = fuente(df_params, grupo, "bh_member_product_mpp")
+    t = fuente(df_params, grupo, "bh_sa_identification_type")
+    mp = fuente(df_params, grupo, "bh_sa_member_product_mpp")
     i2 = fuente(df_params, grupo, "bh_sa_institution")
     h = _bh_member_status_latest(df_params, grupo)
     re_ = _bh_residencial(df_params, grupo)
