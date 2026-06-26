@@ -88,7 +88,10 @@ def llave_comun(izq, der):
     comunes = [k for k in mapa_izq if k in mapa_der and k.endswith("NCODE")]
     if not comunes:
         raise ValueError("No se encontro llave comun (*_NCODE) entre las dos tablas")
-    clave = comunes[0]
+    # PER_NCODE/INS_NCODE son llaves de entidad (ya resueltas via llave_entidad);
+    # si hay otra *_NCODE comun mas especifica de la tabla, se prefiere esa.
+    especificas = [k for k in comunes if k not in ("PER_NCODE", "INS_NCODE")]
+    clave = especificas[0] if especificas else comunes[0]
     return mapa_izq[clave], mapa_der[clave]
 
 # COMMAND ----------
