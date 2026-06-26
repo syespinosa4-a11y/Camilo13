@@ -116,9 +116,9 @@ def _bh_member_status_latest(df_params, grupo):
 
 
 def _bh_residencial(df_params, grupo):
-    ad = fuente(df_params, grupo, "bh_address").filter(F.col("LTY_NCODE") == 1)
+    ad = fuente(df_params, grupo, "bh_sa_address").filter(F.col("LTY_NCODE") == 1)
     tel = fuente(df_params, grupo, "bh_address_telephone_number")
-    ciu = fuente(df_params, grupo, "bh_city")
+    ciu = fuente(df_params, grupo, "bh_sa_city")
     joined = (
         ad.join(tel, tel["ADD_NCODE"] == ad["ADD_NCODE"], "left")
         .join(ciu, ciu["CIT_NCODE"] == ad["CIT_NCODE"], "left")
@@ -134,17 +134,17 @@ def _bh_residencial(df_params, grupo):
 
 
 def _bh_titulares(df_params, grupo):
-    m = fuente(df_params, grupo, "bh_member")
-    a = fuente(df_params, grupo, "bh_affiliation_contract")
+    m = fuente(df_params, grupo, "bh_sa_member")
+    a = fuente(df_params, grupo, "bh_sa_affiliation_contract")
     pln = fuente(df_params, grupo, "bh_plan")
     prod = fuente(df_params, grupo, "bh_product")
-    p = fuente(df_params, grupo, "bh_person")
+    p = fuente(df_params, grupo, "bh_sa_person")
     t = fuente(df_params, grupo, "bh_identification_type")
-    i = fuente(df_params, grupo, "bh_institution")
+    i = fuente(df_params, grupo, "bh_sa_institution")
     t0 = fuente(df_params, grupo, "bh_identification_type")
     h = _bh_member_status_latest(df_params, grupo)
     re_ = _bh_residencial(df_params, grupo)
-    cit_res = fuente(df_params, grupo, "bh_city")
+    cit_res = fuente(df_params, grupo, "bh_sa_city")
     ad_nov = _bh_novelty_administration(df_params, grupo)
 
     df = (
@@ -192,17 +192,17 @@ def _bh_titulares(df_params, grupo):
 
 
 def _bh_beneficiarios(df_params, grupo):
-    m = fuente(df_params, grupo, "bh_member")
-    a = fuente(df_params, grupo, "bh_affiliation_contract")
+    m = fuente(df_params, grupo, "bh_sa_member")
+    a = fuente(df_params, grupo, "bh_sa_affiliation_contract")
     pln = fuente(df_params, grupo, "bh_plan")
     prod = fuente(df_params, grupo, "bh_product")
-    p = fuente(df_params, grupo, "bh_person")
+    p = fuente(df_params, grupo, "bh_sa_person")
     t = fuente(df_params, grupo, "bh_identification_type")
     mp = fuente(df_params, grupo, "bh_member_product_mpp")
-    i2 = fuente(df_params, grupo, "bh_institution")
+    i2 = fuente(df_params, grupo, "bh_sa_institution")
     h = _bh_member_status_latest(df_params, grupo)
     re_ = _bh_residencial(df_params, grupo)
-    cit_res = fuente(df_params, grupo, "bh_city")
+    cit_res = fuente(df_params, grupo, "bh_sa_city")
     ad_nov = _bh_novelty_administration(df_params, grupo)
 
     df = (
