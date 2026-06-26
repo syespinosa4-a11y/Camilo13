@@ -437,14 +437,335 @@ def staging_sat_pyc_generales(df_params, grupo) -> dict:
         "sg_pv_col_categ": _sise_sg_pv_col_categ(df_params, grupo),
     }
 
+# COMMAND ----------
+#
+#   ## Bloque 3b — sat_pyc / Generales: estado de poliza, producto por ramo,
+#   contactos deduplicados y union de los 3 roles (Asegurado/Tomador/
+#   Beneficiario), filtrado a Estado='Vigente' — traduccion 1:1 del script
+#   SQL "Generales".
+
+def _estados_polizas_pv_tramo_endo(df_params, grupo, st, ttipo_ramo: list):
+    pv = st["sg_pv_header"]
+    tramo = st["sg_tramo"].filter(F.col("cod_ttipo_ramo").isin(*ttipo_ramo))
+    ge = fuente(df_params, grupo, "ss_sg_tgrupo_endo")
+    return pv.join(tramo, "cod_ramo", "inner").join(
+        ge, pv["cod_grupo_endo"] == ge["cod_grupo_endo"], "inner"
+    )
+
+
+def sise_estados_polizas_generales(df_params, grupo, st):
+    autos = _estados_polizas_pv_tramo_endo(df_params, grupo, st, [2, 11])
+    autos = autos.select(
+        autos["id_pv"],
+        F.when(
+            (F.col("sn_cancelacion") == 0) & (F.col("sn_cancelacion_automatica") == 0)
+            & (autos["fec_vig_hasta"] > F.current_date()),
+            F.lit(1),
+        ).otherwise(F.lit(2)).alias("estado"),
+        F.lit("Autos").alias("ramos"),
+    )
+
+    ge_excl = (
+        fuente(df_params, grupo, "ss_sg_tgrupo_endo")
+        .filter(
+            (F.col("sn_poliza") == -1)
+            | (F.col("sn_renovacion_automatica") == -1)
+            | (F.col("sn_renovacion_manual") == -1)
+        )
+        .select("cod_grupo_endo")
+    )
+    pv_all = st["sg_pv_header"]
+    conteo_excl = (
+        pv_all.join(ge_excl, "cod_grupo_endo", "inner")
+        .groupBy("cod_suc", "cod_ramo", "nro_pol")
+        .agg(F.count(F.lit(1)).alias("_cnt_excl"))
+    )
+
+    gen_base = _estados_polizas_pv_tramo_endo(
+        df_params, grupo, st, [1, 5, 6, 8, 12, 14, 15, 16, 7]
+    ).join(conteo_excl, ["cod_suc", "cod_ramo", "nro_pol"], "left")
+
+    generales_1 = (
+        gen_base.filter((F.coalesce(F.col("_cnt_excl"), F.lit(0)) <= 1))
+        .select(
+            F.col("id_pv"),
+            F.when(
+                (F.col("sn_cancelacion") == 0)
+                & (F.col("fec_vig_hasta") > F.current_date())
+                & (F.col("fec_vig_desde") <= F.current_date()),
+                F.lit(1),
+            ).otherwise(F.lit(2)).alias("estado"),
+            F.lit("Generales").alias("ramos"),
+        )
+    )
+
+    generales_2 = (
+        _estados_polizas_pv_tramo_endo(df_params, grupo, st, [1, 5, 6, 8, 12, 14, 15, 16])
+        .join(conteo_excl, ["cod_suc", "cod_ramo", "nro_pol"], "left")
+        .filter(F.coalesce(F.col("_cnt_excl"), F.lit(0)) > 1)
+        .select(
+            F.col("id_pv"),
+            F.when(
+                (F.col("sn_cancelacion") == 0) & (F.col("fec_vig_hasta") > F.current_date()),
+                F.lit(1),
+            ).otherwise(F.lit(2)).alias("estado"),
+            F.lit("Generales").alias("ramos"),
+        )
+    )
+
+    vida_col = _estados_polizas_pv_tramo_endo(df_params, grupo, st, [3, 10, 13, 18])
+    vida_col = vida_col.select(
+        vida_col["id_pv"],
+        F.when(
+            (F.col("sn_cancelacion") == 0) & (F.col("sn_cancelacion_automatica") == 0)
+            & (vida_col["fec_vig_hasta"] > F.current_date()),
+            F.lit(1),
+        ).otherwise(F.lit(2)).alias("estado"),
+        F.lit("Vida Colectiva").alias("ramos"),
+    )
+
+    return autos.unionByName(generales_1).unionByName(generales_2).unionByName(vida_col)
+
+
+def sise_producto_generales(df_params, grupo, st):
+    """#Producto_Autos + #Producto_ext + #producto_vida_col, cada uno
+    devuelto por separado (se usan en distintos joins en los roles)."""
+    pv = st["sg_pv_header"]
+    di = st["sg_di_header"]
+    dau = st["sg_di_datos_au"]
+    cob = st["sg_tau_coberturas"]
+    autos = (
+        pv.filter(F.col("cod_ramo").isin(10, 11, 12, 15))
+        .join(di, "id_pv", "inner")
+        .join(dau, (pv["id_pv"] == dau["id_pv"]) & (di["cod_item"] == dau["cod_item"]), "inner")
+        .join(cob, dau["cod_plan_cober"] == cob["cod_cobertura"], "inner")
+        .select(
+            pv["id_pv"], pv["cod_ramo"], di["cod_item"],
+            dau["cod_plan_cober"].alias("cod_producto"), cob["txt_desc"].alias("producto"),
+        )
+        .distinct()
+    )
+
+    varios = st["sg_pv_varios"]
+    tpol = st["sg_ttipo_poliza"]
+    ext = (
+        pv.filter(~F.col("cod_ramo").isin(10, 11, 12, 15))
+        .join(varios, "id_pv", "inner")
+        .join(
+            tpol,
+            (pv["cod_ramo"] == tpol["cod_ramo"]) & (varios["cod_tipo_poliza"] == tpol["cod_tipo_poliza"]),
+            "inner",
+        )
+        .select(
+            pv["id_pv"], pv["cod_ramo"],
+            tpol["cod_tipo_poliza"].alias("cod_producto"), tpol["txt_desc"].alias("producto"),
+        )
+        .distinct()
+    )
+
+    col_categ = st["sg_pv_col_categ"]
+    tvprod = st["sg_tvprod_header"]
+    vida_col = (
+        pv.filter(F.col("cod_sistema").isin(3, 10))
+        .join(col_categ, "id_pv", "inner")
+        .join(
+            tvprod,
+            (col_categ["cod_producto"] == tvprod["cod_producto"]) & (pv["cod_ramo"] == tvprod["cod_ramo"]),
+            "inner",
+        )
+        .select(
+            pv["id_pv"], pv["cod_ramo"],
+            tvprod["cod_producto"], tvprod["txt_desc_producto"].alias("producto"),
+        )
+        .distinct()
+    )
+    w = Window.partitionBy("id_pv", "cod_ramo").orderBy(F.col("cod_producto").desc())
+    vida_col = (
+        vida_col.withColumn("_rn", F.row_number().over(w))
+        .filter(F.col("_rn") == 1)
+        .drop("_rn")
+    )
+    return autos, ext, vida_col
+
+
+def _sise_contactos(st):
+    """#Email/#celular/#telfono/#direccion: maximo de los 2 primeros valores
+    por persona (rank descendente), separados por tipo de contacto."""
+    dir_ = st["mpersona_dir"]
+    telef = st["mpersona_telef"]
+    tdpto = st["tdpto"]
+    tmun = st["tmunicipio"]
+
+    def top2(df, claves, valor_col, salida):
+        w = Window.partitionBy(*claves).orderBy(F.col(valor_col).desc())
+        ranked = df.filter(F.col(valor_col) != "").withColumn("_rnk", F.rank().over(w))
+        return (
+            ranked.groupBy("id_persona")
+            .agg(
+                F.max(F.when(F.col("_rnk") == 1, F.col(valor_col))).alias(f"{salida}_1"),
+                F.max(F.when(F.col("_rnk") == 2, F.col(valor_col))).alias(f"{salida}_2"),
+            )
+        )
+
+    email = top2(dir_.filter(F.col("cod_tipo_dir").isin(15, 13)), ["id_persona", "cod_tipo_dir"], "txt_direccion", "email")
+    celular = top2(telef.filter(F.col("cod_tipo_telef").isin(4, 10)), ["id_persona", "cod_tipo_telef"], "txt_telefono", "celular")
+    telefono = top2(telef.filter(~F.col("cod_tipo_telef").isin(4, 10)), ["id_persona", "cod_tipo_telef"], "txt_telefono", "telefono")
+
+    dir_base = dir_.filter(~F.col("cod_tipo_dir").isin(15, 13) & (F.col("txt_direccion") != ""))
+    w_min = Window.partitionBy("id_persona")
+    dir_base = dir_base.withColumn("_min_tipo", F.min("cod_tipo_dir").over(w_min)).filter(
+        F.col("cod_tipo_dir") == F.col("_min_tipo")
+    )
+    direccion = (
+        dir_base.join(tdpto, ["cod_pais", "cod_dpto"], "inner")
+        .join(tmun, ["cod_pais", "cod_dpto", "cod_municipio"], "inner")
+        .select(
+            dir_base["id_persona"], dir_base["txt_direccion"],
+            tdpto["txt_desc"].alias("departamento"), tmun["txt_desc"].alias("muncipio"),
+        )
+    )
+    return email, celular, telefono, direccion
+
+
+def _edad(fec_nac_col):
+    return F.floor(F.months_between(F.current_date(), fec_nac_col) / 12).cast("int")
+
+
+def _rol_select(pv, tramo, tpd, persona, autos, ext, vida_col, tpol, estados, email, celular, telefono, direccion, rol_nombre):
+    return [
+        pv["nro_pol"], pv["cod_ramo"], pv["cod_suc"], pv["nro_endoso"], pv["aaaa_endoso"],
+        tramo["txt_desc"].alias("ramo"),
+        F.coalesce(F.col("aut.cod_producto"), F.col("aut_ext.cod_producto"), F.col("p_vid_col.cod_producto"), tpol["cod_tipo_poliza"]).alias("cod_producto"),
+        F.coalesce(F.col("aut.producto"), F.col("aut_ext.producto"), F.col("p_vid_col.producto"), tpol["txt_desc"]).alias("producto"),
+        tpd["txt_desc_redu"].alias("tipo_documento"),
+        tpd["txt_desc"].alias("desc_tipo_documento"),
+        persona["nro_doc"].alias("numero_documento"),
+        persona["txt_apellido1"], persona["txt_apellido2"], persona["txt_nombre"],
+        F.lit(rol_nombre).alias("Rol"),
+        _edad(persona["fec_nac"]).alias("edad"),
+        persona["txt_sexo"].alias("Genero"),
+        persona["fec_nac"].alias("Fecha_Nacimiento"),
+        F.col("email_1"), F.col("email_2"), F.col("celular_1"), F.col("celular_2"),
+        F.when(estados["estado"] == 1, F.lit("Vigente")).when(estados["estado"] == 2, F.lit("Cancelado")).alias("Estado"),
+        F.col("telefono_1"), F.col("telefono_2"),
+        direccion["txt_direccion"], direccion["departamento"], direccion["muncipio"],
+    ]
+
+
+def _rol_asegurado_generales(pv, st, autos, ext, vida_col, estados):
+    """from pv inner join di_header inner join maseg_header(cod_aseg=b.cod_aseg)
+    inner join mpersona, producto via di_header.cod_item."""
+    di = st["sg_di_header"]
+    maseg = st["maseg_header"]
+    persona = st["mpersona"]
+    tpd = st["ttipo_doc"]
+    tramo = st["sg_tramo"]
+    pvv = st["sg_pv_varios"]
+    tpol = st["sg_ttipo_poliza"]
+    email, celular, telefono, direccion = _sise_contactos(st)
+
+    base = (
+        pv.join(di, "id_pv", "inner")
+        .join(maseg, di["cod_aseg"] == maseg["cod_aseg"], "inner")
+        .join(persona, maseg["id_persona"] == persona["id_persona"], "inner")
+        .join(email, persona["id_persona"] == email["id_persona"], "left")
+        .join(celular, persona["id_persona"] == celular["id_persona"], "left")
+        .join(telefono, persona["id_persona"] == telefono["id_persona"], "left")
+        .join(direccion, persona["id_persona"] == direccion["id_persona"], "left")
+        .join(tpd, persona["cod_tipo_doc"] == tpd["cod_tipo_doc"], "inner")
+        .join(tramo, pv["cod_ramo"] == tramo["cod_ramo"], "inner")
+        .join(autos.alias("aut"), (pv["id_pv"] == F.col("aut.id_pv")) & (di["cod_item"] == F.col("aut.cod_item")), "left")
+        .join(ext.alias("aut_ext"), pv["id_pv"] == F.col("aut_ext.id_pv"), "left")
+        .join(vida_col.alias("p_vid_col"), pv["id_pv"] == F.col("p_vid_col.id_pv"), "left")
+        .join(pvv, pv["id_pv"] == pvv["id_pv"], "left")
+        .join(tpol, (pv["cod_ramo"] == tpol["cod_ramo"]) & (pvv["cod_tipo_poliza"] == tpol["cod_tipo_poliza"]), "left")
+        .join(estados, pv["id_pv"] == estados["id_pv"], "left")
+    )
+    return base.select(*_rol_select(pv, tramo, tpd, persona, autos, ext, vida_col, tpol, estados, email, celular, telefono, direccion, "Asegurado")).distinct()
+
+
+def _rol_tomador_generales(pv, st, autos, ext, vida_col, estados):
+    """from pv inner join maseg_header(cod_aseg=pv.cod_aseg) inner join
+    mpersona, producto via #1ss_sg_di_header_aux (max cod_item por id_pv)."""
+    maseg = st["maseg_header"]
+    persona = st["mpersona"]
+    tpd = st["ttipo_doc"]
+    tramo = st["sg_tramo"]
+    pvv = st["sg_pv_varios"]
+    tpol = st["sg_ttipo_poliza"]
+    email, celular, telefono, direccion = _sise_contactos(st)
+    di_aux = st["sg_di_header"].groupBy("id_pv").agg(F.max("cod_item").alias("cod_item"))
+
+    base = (
+        pv.join(maseg, pv["cod_aseg"] == maseg["cod_aseg"], "inner")
+        .join(persona, maseg["id_persona"] == persona["id_persona"], "inner")
+        .join(email, persona["id_persona"] == email["id_persona"], "left")
+        .join(celular, persona["id_persona"] == celular["id_persona"], "left")
+        .join(telefono, persona["id_persona"] == telefono["id_persona"], "left")
+        .join(direccion, persona["id_persona"] == direccion["id_persona"], "left")
+        .join(tpd, persona["cod_tipo_doc"] == tpd["cod_tipo_doc"], "inner")
+        .join(tramo, pv["cod_ramo"] == tramo["cod_ramo"], "inner")
+        .join(di_aux, pv["id_pv"] == di_aux["id_pv"], "left")
+        .join(autos.alias("aut"), (pv["id_pv"] == F.col("aut.id_pv")) & (di_aux["cod_item"] == F.col("aut.cod_item")), "left")
+        .join(ext.alias("aut_ext"), pv["id_pv"] == F.col("aut_ext.id_pv"), "left")
+        .join(vida_col.alias("p_vid_col"), pv["id_pv"] == F.col("p_vid_col.id_pv"), "left")
+        .join(pvv, pv["id_pv"] == pvv["id_pv"], "left")
+        .join(tpol, (pv["cod_ramo"] == tpol["cod_ramo"]) & (pvv["cod_tipo_poliza"] == tpol["cod_tipo_poliza"]), "left")
+        .join(estados, pv["id_pv"] == estados["id_pv"], "left")
+    )
+    return base.select(*_rol_select(pv, tramo, tpd, persona, autos, ext, vida_col, tpol, estados, email, celular, telefono, direccion, "Tomador")).distinct()
+
+
+def _rol_beneficiario_generales(pv, st, autos, ext, vida_col, estados):
+    """from pv inner join di_benef(cod_ind_benef=1) inner join
+    mpersona(cod_benef=id_persona)."""
+    di_benef = st["sg_di_benef"]
+    persona = st["mpersona"]
+    tpd = st["ttipo_doc"]
+    tramo = st["sg_tramo"]
+    pvv = st["sg_pv_varios"]
+    tpol = st["sg_ttipo_poliza"]
+    email, celular, telefono, direccion = _sise_contactos(st)
+
+    base = (
+        pv.join(di_benef, "id_pv", "inner")
+        .join(persona, di_benef["cod_benef"] == persona["id_persona"], "inner")
+        .join(email, persona["id_persona"] == email["id_persona"], "left")
+        .join(celular, persona["id_persona"] == celular["id_persona"], "left")
+        .join(telefono, persona["id_persona"] == telefono["id_persona"], "left")
+        .join(direccion, persona["id_persona"] == direccion["id_persona"], "left")
+        .join(tpd, persona["cod_tipo_doc"] == tpd["cod_tipo_doc"], "inner")
+        .join(tramo, pv["cod_ramo"] == tramo["cod_ramo"], "inner")
+        .join(autos.alias("aut"), pv["id_pv"] == F.col("aut.id_pv"), "left")
+        .join(ext.alias("aut_ext"), pv["id_pv"] == F.col("aut_ext.id_pv"), "left")
+        .join(vida_col.alias("p_vid_col"), pv["id_pv"] == F.col("p_vid_col.id_pv"), "left")
+        .join(pvv, pv["id_pv"] == pvv["id_pv"], "left")
+        .join(tpol, (pv["cod_ramo"] == tpol["cod_ramo"]) & (pvv["cod_tipo_poliza"] == tpol["cod_tipo_poliza"]), "left")
+        .join(estados, pv["id_pv"] == estados["id_pv"], "left")
+    )
+    return base.select(*_rol_select(pv, tramo, tpd, persona, autos, ext, vida_col, tpol, estados, email, celular, telefono, direccion, "Beneficiario")).distinct()
+
+
+def build_sat_pyc_generales(df_params, grupo):
+    st = staging_sat_pyc_generales(df_params, grupo)
+    pv = st["sg_pv_header"]
+    estados = sise_estados_polizas_generales(df_params, grupo, st)
+    autos, ext, vida_col = sise_producto_generales(df_params, grupo, st)
+
+    rol_asegurado = _rol_asegurado_generales(pv, st, autos, ext, vida_col, estados)
+    rol_tomador = _rol_tomador_generales(pv, st, autos, ext, vida_col, estados)
+    rol_beneficiario = _rol_beneficiario_generales(pv, st, autos, ext, vida_col, estados)
+
+    clientes = rol_asegurado.unionByName(rol_tomador).unionByName(rol_beneficiario).distinct()
+    return clientes.filter(F.col("Estado") == "Vigente")
+
 
 def build_sat_pyc(df_params, grupo):
-    raise NotImplementedError(
-        "sat_pyc: pendiente — falta traducir estado de poliza, producto por "
-        "ramo y los 3 roles (Asegurado/Tomador/Beneficiario) sobre el "
-        "staging de staging_sat_pyc_generales(). Validar primero el "
-        "staging (conteos vs #1ss_* del SQL) antes de continuar."
-    )
+    """Por ahora solo implementa el script 'Generales'. El script 'Vida'
+    (tablas ss_sv_*, logica de producto individual/colectivo distinta)
+    queda pendiente como build_sat_pyc_vida — se valida primero Generales
+    antes de traducir Vida, segun lo acordado."""
+    return build_sat_pyc_generales(df_params, grupo)
 
 # COMMAND ----------
 #
