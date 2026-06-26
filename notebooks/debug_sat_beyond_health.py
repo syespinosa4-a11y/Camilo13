@@ -1,131 +1,176 @@
 # Databricks notebook source
-# Debug funcion por funcion / paso por paso — sat_beyond_health
+# Debug ultra paso a paso — sat_beyond_health
 # No reemplaza al notebook de produccion (satelites_parametrizados.py).
 # Premisa: sigue parametrizado, todo sale de DIM_PARAMETROS via fuente()/get_param().
-# Cada celda hace UNA sola cosa — ejecuta celda por celda y revisa el resultado
-# antes de pasar a la siguiente.
+# Cada celda hace UNA sola accion. Ejecuta una por una.
 
 # COMMAND ----------
-# PASO 0 — imports
+# 1. import SparkSession
 
-from pyspark.sql import SparkSession, Window
+from pyspark.sql import SparkSession
+
+# COMMAND ----------
+# 2. import Window
+
+from pyspark.sql import Window
+
+# COMMAND ----------
+# 3. import functions as F
+
 from pyspark.sql import functions as F
 
+# COMMAND ----------
+# 4. obtener spark
+
 spark = SparkSession.builder.getOrCreate()
-print("imports OK")
 
 # COMMAND ----------
-# PASO 1 — variables de parametrizacion (catalogo/esquema de DIM_PARAMETROS y grupo)
+# 5. variable: nombre completo de la tabla de parametros
 
 PARAMS_TABLE = "`uc_axa_cli`.`silver`.`dim_parametros`"
+
+# COMMAND ----------
+# 6. variable: grupo que vamos a depurar
+
 GRUPO = "sat_beyond_health"
-print("PARAMS_TABLE:", PARAMS_TABLE)
-print("GRUPO:", GRUPO)
 
 # COMMAND ----------
-# PASO 2 — funcion cargar_parametros (la definimos, todavia no la ejecutamos)
+# 7. leer DIM_PARAMETROS (sin cache todavia, solo leer)
 
-def cargar_parametros():
-    return spark.table(PARAMS_TABLE).cache()
-
-print("funcion cargar_parametros definida")
+df_params = spark.table(PARAMS_TABLE)
 
 # COMMAND ----------
-# PASO 3 — ejecutar cargar_parametros y ver que SI trae filas
+# 8. contar filas totales de DIM_PARAMETROS
 
-df_params = cargar_parametros()
-print("filas en DIM_PARAMETROS:", df_params.count())
-df_params.show(5, truncate=False)
+df_params.count()
 
 # COMMAND ----------
-# PASO 4 — ver TODAS las filas de parametros del grupo sat_beyond_health
-# (esto es clave: si esto sale vacio, fuente()/get_param() nunca van a
-# funcionar porque no hay de donde leer catalogo_fuente/esquema_fuente)
+# 9. ver el esquema (columnas) de DIM_PARAMETROS
 
-df_params.filter(F.col("grupo_parametros") == GRUPO).show(50, truncate=False)
+df_params.printSchema()
 
 # COMMAND ----------
-# PASO 5 — funcion get_param (la definimos)
+# 10. filtrar solo las filas del grupo sat_beyond_health (sin mostrar aun)
 
-def get_param(df_params, grupo, nombre, default=None):
-    row = (
-        df_params
-        .filter((F.col("grupo_parametros") == grupo) & (F.col("nombre") == nombre))
-        .select("valor")
-        .first()
-    )
-    return row[0] if row else default
-
-print("funcion get_param definida")
+df_grupo = df_params.filter(F.col("grupo_parametros") == GRUPO)
 
 # COMMAND ----------
-# PASO 6 — leer catalogo_fuente y esquema_fuente con get_param
-# Si alguno sale en None, ESE es el problema raiz: faltan esas filas en
-# DIM_PARAMETROS para el grupo sat_beyond_health.
+# 11. contar cuantas filas tiene ese grupo
+# *** si esto da 0, ya encontramos el problema: no hay parametros cargados
+# para sat_beyond_health y por eso nada de lo siguiente puede funcionar ***
 
-catalogo_fuente = get_param(df_params, GRUPO, "catalogo_fuente")
-esquema_fuente = get_param(df_params, GRUPO, "esquema_fuente")
-print("catalogo_fuente:", catalogo_fuente)
-print("esquema_fuente:", esquema_fuente)
+df_grupo.count()
 
 # COMMAND ----------
-# PASO 7 — leer tambien catalogo / esquema / tabla_destino / id_columna_pk
-# (destino del satelite, para confirmar que tambien estan parametrizados)
+# 12. mostrar esas filas (nombre / valor)
 
-print("catalogo (destino):", get_param(df_params, GRUPO, "catalogo"))
-print("esquema (destino):", get_param(df_params, GRUPO, "esquema"))
-print("tabla_destino:", get_param(df_params, GRUPO, "tabla_destino"))
-print("id_columna_pk:", get_param(df_params, GRUPO, "id_columna_pk"))
-print("estado:", get_param(df_params, GRUPO, "estado"))
-print("constructor:", get_param(df_params, GRUPO, "constructor"))
+df_grupo.select("nombre", "valor").show(50, truncate=False)
 
 # COMMAND ----------
-# PASO 8 — funcion fuente (la definimos)
+# 13. extraer puntualmente la fila "catalogo_fuente"
 
-def fuente(df_params, grupo, tabla_fisica):
-    catalogo = get_param(df_params, grupo, "catalogo_fuente")
-    esquema = get_param(df_params, grupo, "esquema_fuente")
-    return spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
-
-print("funcion fuente definida")
+fila_catalogo_fuente = df_grupo.filter(F.col("nombre") == "catalogo_fuente").select("valor").first()
 
 # COMMAND ----------
-# PASO 9 — probar fuente() con UNA sola tabla: bh_sa_member
-# Si esto falla (tabla no existe / catalogo o esquema vacio), el error
-# aparece aqui mismo con el nombre completo que intento leer.
+# 14. ver que trajo esa fila (None si no existe)
 
-m = fuente(df_params, GRUPO, "bh_sa_member")
-print("bh_sa_member -> filas:", m.count())
+fila_catalogo_fuente
+
+# COMMAND ----------
+# 15. extraer puntualmente la fila "esquema_fuente"
+
+fila_esquema_fuente = df_grupo.filter(F.col("nombre") == "esquema_fuente").select("valor").first()
+
+# COMMAND ----------
+# 16. ver que trajo esa fila (None si no existe)
+
+fila_esquema_fuente
+
+# COMMAND ----------
+# 17. guardar el valor real de catalogo_fuente (string, no Row)
+
+catalogo_fuente = fila_catalogo_fuente[0] if fila_catalogo_fuente else None
+catalogo_fuente
+
+# COMMAND ----------
+# 18. guardar el valor real de esquema_fuente (string, no Row)
+
+esquema_fuente = fila_esquema_fuente[0] if fila_esquema_fuente else None
+esquema_fuente
+
+# COMMAND ----------
+# 19. armar el nombre completo de la tabla bh_sa_member con esos valores
+# *** si catalogo_fuente o esquema_fuente salieron None en los pasos 17/18,
+# esta celda va a fallar o va a armar un nombre invalido como ``.``.`bh_sa_member` ***
+
+nombre_tabla_member = f"`{catalogo_fuente}`.`{esquema_fuente}`.`bh_sa_member`"
+nombre_tabla_member
+
+# COMMAND ----------
+# 20. intentar leer esa tabla
+
+m = spark.table(nombre_tabla_member)
+
+# COMMAND ----------
+# 21. contar filas de bh_sa_member
+
+m.count()
+
+# COMMAND ----------
+# 22. ver 5 filas de bh_sa_member
+
 m.show(5)
 
 # COMMAND ----------
-# PASO 10 — probar fuente() con bh_sa_affiliation_contract
+# 23. armar el nombre completo de bh_sa_affiliation_contract
 
-a = fuente(df_params, GRUPO, "bh_sa_affiliation_contract")
-print("bh_sa_affiliation_contract -> filas:", a.count())
-a.show(5)
+nombre_tabla_aco = f"`{catalogo_fuente}`.`{esquema_fuente}`.`bh_sa_affiliation_contract`"
+nombre_tabla_aco
 
 # COMMAND ----------
-# PASO 11 — ver si las columnas de cruce existen y que tipo de dato tienen
-# (m.ACO_NCODE vs a.ACO_NCODE) — un mismatch de tipo (string vs int) hace
-# que el join no traiga nada aunque los valores "parezcan" iguales.
+# 24. leer bh_sa_affiliation_contract
+
+a = spark.table(nombre_tabla_aco)
+
+# COMMAND ----------
+# 25. contar filas de bh_sa_affiliation_contract
+
+a.count()
+
+# COMMAND ----------
+# 26. ver el tipo de dato de m.ACO_NCODE
 
 m.select("ACO_NCODE").printSchema()
+
+# COMMAND ----------
+# 27. ver el tipo de dato de a.ACO_NCODE
+# *** si el tipo aqui es distinto al del paso 26 (ej. string vs bigint),
+# ese es el motivo de que el join no cruce ***
+
 a.select("ACO_NCODE").printSchema()
 
 # COMMAND ----------
-# PASO 12 — comparar valores reales de ACO_NCODE de ambos lados (sin join,
-# solo distinct) para confirmar que de verdad coinciden valores
+# 28. ver 10 valores distintos de m.ACO_NCODE
 
 m.select("ACO_NCODE").distinct().show(10)
+
+# COMMAND ----------
+# 29. ver 10 valores distintos de a.ACO_NCODE
+# *** compara a simple vista contra el paso 28: si los valores no se
+# parecen en nada (formato, longitud, ceros a la izquierda), no van a
+# cruzar aunque el tipo de dato sea el mismo ***
+
 a.select("ACO_NCODE").distinct().show(10)
 
 # COMMAND ----------
-# PASO 13 — recien aqui, el primer join: m + a (inner, ACO_NCODE)
+# 30. recien aqui, el primer join real: m + a (inner, ACO_NCODE)
 
 df1 = m.join(a, a["ACO_NCODE"] == m["ACO_NCODE"], "inner")
-print("m x a (ACO_NCODE) -> filas:", df1.count())
 
-# Si PASO 13 da 0 filas pero PASO 9/10 si traian filas, el problema esta en
-# la condicion del join (tipo de dato distinto, o los valores no coinciden
-# realmente) y no en la parametrizacion ni en la lectura de las tablas.
+# COMMAND ----------
+# 31. contar filas del join
+# *** compara contra paso 21 y 25: si aqui da 0 pero ahi habia filas,
+# el problema es la condicion del join (tipo de dato o formato del valor),
+# no la lectura de las tablas ni la parametrizacion ***
+
+df1.count()
