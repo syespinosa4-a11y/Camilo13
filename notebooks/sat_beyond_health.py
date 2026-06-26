@@ -159,9 +159,37 @@ def build_sat_beyond_health():
     return df
 
 # COMMAND ----------
-# Ejecucion: solo construye y muestra conteo/esquema (todavia no escribe a
-# Delta — eso se agrega cuando se valide que el join cruza correctamente).
+# El join trae columnas repetidas (mismo nombre en mas de una tabla origen,
+# ej. PER_NCODE, COMPANIA, FEC_CARGUE): Delta no permite columnas duplicadas
+# al escribir. Se desambiguan sufijando "_n" a partir de la segunda aparicion,
+# conservando la primera con su nombre original.
 
-df_resultado = build_sat_beyond_health()
+def deduplicar_columnas(df):
+    vistos = {}
+    nuevos = []
+    for c in df.columns:
+        if c not in vistos:
+            vistos[c] = 0
+            nuevos.append(c)
+        else:
+            vistos[c] += 1
+            nuevos.append(f"{c}_{vistos[c]}")
+    return df.toDF(*nuevos)
+
+# COMMAND ----------
+# Construccion final: una fila por entidad (no una fila por tabla origen),
+# con id y fecha de carga, lista para sobrescribir el destino.
+
+df_resultado = deduplicar_columnas(build_sat_beyond_health())
+df_resultado = df_resultado.withColumn(CONFIG["id_columna_pk"], F.monotonically_increasing_id())
+df_resultado = df_resultado.withColumn("dv_load_date", F.lit(LOAD_TS))
+
 print("filas:", df_resultado.count())
 df_resultado.printSchema()
+
+# COMMAND ----------
+# Escritura a Delta: sobrescribe completo (son pruebas, la tabla destino
+# tenia la version vieja por union, con filas repetidas por tabla origen).
+
+destino = f"`{CONFIG['catalogo_destino']}`.`{CONFIG['esquema_destino']}`.`{CONFIG['tabla_destino']}`"
+df_resultado.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(destino)
