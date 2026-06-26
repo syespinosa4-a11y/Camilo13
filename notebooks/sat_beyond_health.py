@@ -94,8 +94,8 @@ def base_entidades(tablas: dict):
     return p.unionByName(i, allowMissingColumns=True)
 
 # COMMAND ----------
-# Join generico de una tabla "satelite de entidad" (address, affiliation_contract,
-# member) contra el universo base, por ID_ENTIDAD_HUB.
+# Join generico de una tabla "satelite de entidad" (address, affiliation_contract)
+# contra el universo base, por ID_ENTIDAD_HUB.
 
 def unir_por_entidad(base, tabla, alias: str):
     llave = llave_entidad(tabla)
@@ -109,6 +109,20 @@ def unir_por_entidad(base, tabla, alias: str):
     )
 
 # COMMAND ----------
+# Join por puente: para tablas que no tienen PER_NCODE/INS_NCODE directo
+# (ej. bh_sa_member), se cruzan contra otra tabla ya unida (ej. affiliation_contract)
+# usando la llave *_NCODE que tengan en comun (detectada dinamicamente, no quemada).
+
+def unir_por_puente(df, alias_referencia: str, tabla_referencia_original, tabla_nueva, alias_nueva: str):
+    llave = llave_comun(tabla_referencia_original, tabla_nueva)
+    tabla_alias = tabla_nueva.alias(alias_nueva)
+    return df.join(
+        tabla_alias,
+        df[f"{alias_referencia}.{llave}"] == tabla_alias[llave],
+        "left",
+    )
+
+# COMMAND ----------
 # Construccion del "big dataframe" de sat_beyond_health.
 
 def build_sat_beyond_health():
@@ -117,7 +131,7 @@ def build_sat_beyond_health():
     base = base_entidades(tablas)
     df = unir_por_entidad(base, tablas["bh_sa_address"], "addr")
     df = unir_por_entidad(df, tablas["bh_sa_affiliation_contract"], "aco")
-    df = unir_por_entidad(df, tablas["bh_sa_member"], "mem")
+    df = unir_por_puente(df, "aco", tablas["bh_sa_affiliation_contract"], tablas["bh_sa_member"], "mem")
 
     ciu = tablas["bh_sa_city"]
     pai = tablas["bh_sa_country"]
