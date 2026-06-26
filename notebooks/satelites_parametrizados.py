@@ -168,6 +168,11 @@ def _bh_titulares(df_params, grupo):
     )
     es_institucion = i["INS_NCODE"].isNotNull()
     return df.select(
+        # Llave de enlace al HUB_CLIENTE: el titular puede ser una persona
+        # natural (PER_NCODE) o una institucion/persona juridica (INS_NCODE);
+        # solo una de las dos existe por fila, de ahi el coalesce — es la
+        # llave compuesta que pide el negocio (no un id autoincremental).
+        F.coalesce(p["PER_NCODE"].cast("string"), i["INS_NCODE"].cast("string")).alias("ID_ENTIDAD_HUB"),
         F.when(~es_institucion, t["ITY_CSHORTNAME"]).otherwise(F.col("t0.ITY_CSHORTNAME")).alias("TIPO_DE_DOCUMENTO"),
         F.when(~es_institucion, p["PER_CIDENTIFICATIONNUMBER"]).otherwise(i["INS_CIDENTIFICATIONNUMBER"]).alias("DOCUMENTO_DE_IDENTIFICACION"),
         F.when(~es_institucion, F.concat_ws(" ", p["PER_CFIRSTNAME"], F.coalesce(p["PER_CMIDDLENAME"], F.lit("")))).otherwise(F.lit("")).alias("NOMBRE"),
@@ -221,6 +226,9 @@ def _bh_beneficiarios(df_params, grupo):
     )
     es_institucion = a["INS_NCODE"].isNotNull()
     return df.select(
+        # Misma llave compuesta del titular: la institucion del contrato de
+        # afiliacion (a.INS_NCODE) o la persona beneficiaria (p.PER_NCODE).
+        F.coalesce(p["PER_NCODE"].cast("string"), a["INS_NCODE"].cast("string")).alias("ID_ENTIDAD_HUB"),
         t["ITY_CSHORTNAME"].alias("TIPO_DE_DOCUMENTO"),
         p["PER_CIDENTIFICATIONNUMBER"].alias("DOCUMENTO_DE_IDENTIFICACION"),
         F.concat_ws(" ", p["PER_CFIRSTNAME"], F.coalesce(p["PER_CMIDDLENAME"], F.lit(""))).alias("NOMBRE"),
@@ -800,11 +808,20 @@ def escribir_satelite(df_params, grupo: str, df_resultado):
     esquema = get_param(df_params, grupo, "esquema")
     tabla = get_param(df_params, grupo, "tabla_destino")
     id_col = get_param(df_params, grupo, "id_columna_pk")
+    llave_negocio = get_param(df_params, grupo, "llave_negocio")  # ej: "ID_ENTIDAD_HUB,ROL"
     destino = f"`{catalogo}`.`{esquema}`.`{tabla}`"
 
     df_resultado = df_resultado.withColumn("dv_load_date", F.lit(LOAD_TS))
     if id_col:
-        df_resultado = df_resultado.withColumn(id_col, F.monotonically_increasing_id().cast("long"))
+        if llave_negocio:
+            # PK = hash de la llave de negocio compuesta (no autoincremental),
+            # para que el mismo cliente/rol siempre produzca la misma PK.
+            columnas = [c.strip() for c in llave_negocio.split(",")]
+            df_resultado = df_resultado.withColumn(
+                id_col, F.sha2(F.concat_ws("||", *[F.coalesce(F.col(c).cast("string"), F.lit("")) for c in columnas]), 256)
+            )
+        else:
+            df_resultado = df_resultado.withColumn(id_col, F.monotonically_increasing_id().cast("long"))
 
     df_resultado.writeTo(destino).using("delta").createOrReplace()
     print(f"  ✓ {grupo} → {destino}  ({spark.table(destino).count():,} filas)")
