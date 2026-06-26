@@ -11,8 +11,9 @@
 # bh_sa_member se conectan directo contra la entidad (persona o institucion)
 # usando PER_NCODE o INS_NCODE — la que exista en cada tabla, detectada
 # dinamicamente por columnas (nada de "if tabla == 'x'" quemado). bh_sa_city
-# y bh_sa_country son catalogos de referencia: se cruzan contra address/city
-# por la llave *_NCODE que tengan en comun, tambien detectada dinamicamente.
+# es catalogo de referencia: se cruza contra address por la llave *_NCODE
+# que tengan en comun, tambien detectada dinamicamente. bh_sa_country no se
+# incluye: no existe tabla de departamento que conecte city con country.
 
 from pyspark.sql import functions as F
 from pyspark.sql import SparkSession
@@ -38,7 +39,6 @@ TABLAS_BH = [
     "bh_sa_person",
     "bh_sa_address",
     "bh_sa_institution",
-    "bh_sa_country",
     "bh_sa_city",
     "bh_sa_affiliation_contract",
     "bh_sa_member",
@@ -146,18 +146,11 @@ def build_sat_beyond_health():
     df = unir_por_puente(df, "aco", tablas["bh_sa_affiliation_contract"], tablas["bh_sa_member"], "mem")
 
     ciu = tablas["bh_sa_city"]
-    pai = tablas["bh_sa_country"]
     llave_addr, llave_ciu_addr = llave_comun(tablas["bh_sa_address"], ciu)
-    llave_ciu_pai, llave_pai_ciu = llave_comun(ciu, pai)
 
     df = df.join(
         ciu.alias("ciu"),
         df[f"addr.{llave_addr}"] == F.col(f"ciu.{llave_ciu_addr}"),
-        "left",
-    )
-    df = df.join(
-        pai.alias("pai"),
-        F.col(f"ciu.{llave_ciu_pai}") == F.col(f"pai.{llave_pai_ciu}"),
         "left",
     )
     return df
