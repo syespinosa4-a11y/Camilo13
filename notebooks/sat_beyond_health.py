@@ -187,13 +187,34 @@ def deduplicar_columnas(df):
 df_resultado = deduplicar_columnas(build_sat_beyond_health())
 df_resultado = df_resultado.withColumn(CONFIG["id_columna_pk"], F.monotonically_increasing_id())
 df_resultado = df_resultado.withColumn("dv_load_date", F.lit(LOAD_TS))
+df_resultado = df_resultado.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 
 print("filas:", df_resultado.count())
 df_resultado.printSchema()
 
 # COMMAND ----------
+# Propiedades de la tabla Delta destino (CDF, auto-optimize, compatibilidad
+# Iceberg). Se aplican via opciones del writer, sin usar SQL.
+
+TBLPROPERTIES = {
+    "delta.enableChangeDataFeed": "true",
+    "delta.autoOptimize.optimizeWrite": "true",
+    "delta.feature.allowColumnDefaults": "supported",
+    "delta.enableIcebergCompatV2": "true",
+    "delta.universalFormat.enabledFormats": "iceberg",
+}
+
+# COMMAND ----------
 # Escritura a Delta: sobrescribe completo (son pruebas, la tabla destino
 # tenia la version vieja por union, con filas repetidas por tabla origen).
+# Cluster by fecha_creacion en lugar de particionar.
 
 destino = f"`{CONFIG['catalogo_destino']}`.`{CONFIG['esquema_destino']}`.`{CONFIG['tabla_destino']}`"
-df_resultado.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(destino)
+(
+    df_resultado.write.format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .options(**TBLPROPERTIES)
+    .clusterBy("fecha_creacion")
+    .saveAsTable(destino)
+)
