@@ -168,6 +168,7 @@ def deduplicar_columnas(df):
     # Delta/Spark tratan los nombres de columna sin distinguir mayuscula de
     # minuscula (ACO_NCODE y aco_ncode son la misma columna al guardar), asi
     # que la deteccion de duplicados tambien debe ser case-insensitive.
+    usados = {c.upper() for c in df.columns}
     vistos = {}
     nuevos = []
     for c in df.columns:
@@ -176,8 +177,17 @@ def deduplicar_columnas(df):
             vistos[clave] = 0
             nuevos.append(c)
         else:
+            # El sufijo "_n" generado puede coincidir con una columna que ya
+            # existe literalmente en el origen (ej. COD_AGENTE_1 real),
+            # asi que se sigue incrementando hasta encontrar un nombre que
+            # no este en uso, en vez de asumir que el primer intento es libre.
             vistos[clave] += 1
-            nuevos.append(f"{c}_{vistos[clave]}")
+            candidato = f"{c}_{vistos[clave]}"
+            while candidato.upper() in usados:
+                vistos[clave] += 1
+                candidato = f"{c}_{vistos[clave]}"
+            nuevos.append(candidato)
+            usados.add(candidato.upper())
     return df.toDF(*nuevos)
 
 # COMMAND ----------
