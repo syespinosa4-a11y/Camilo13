@@ -305,6 +305,13 @@ def cargar_tablas_sise() -> dict:
 # (mismo problema y misma solucion que en unir_por_entidad).
 
 def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str = "left", alias_izq: str = None):
+    # El nombre real de cada columna se resuelve case-insensitive (mismo
+    # motivo que en llave_comun): las tablas SISE no garantizan la misma
+    # mayuscula/minuscula para una misma columna logica entre dos tablas
+    # (ej. COD_ASEG vs cod_aseg), y comparar/dropear por el nombre literal
+    # tal cual se escribio en la lista deja columnas duplicadas que Spark
+    # no logra resolver mas adelante ([COLUMN_ALREADY_EXISTS]).
+    mapa_der = _mapa_columnas(der)
     der_alias = der.alias(alias_der)
     condicion = None
     for columna in columnas:
@@ -313,11 +320,13 @@ def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str
         # de una tabla origen): hay que anclar a que alias especifico
         # pertenece la columna del puente, si no la referencia es ambigua.
         col_izq = izq[f"{alias_izq}.{columna}"] if alias_izq else izq[columna]
-        cond_col = col_izq == der_alias[columna]
+        columna_der = mapa_der.get(columna.upper(), columna)
+        cond_col = col_izq == der_alias[columna_der]
         condicion = cond_col if condicion is None else (condicion & cond_col)
     unido = izq.join(der_alias, condicion, tipo)
     for columna in columnas:
-        unido = unido.drop(der_alias[columna])
+        columna_der = mapa_der.get(columna.upper(), columna)
+        unido = unido.drop(der_alias[columna_der])
     return unido
 
 # COMMAND ----------
