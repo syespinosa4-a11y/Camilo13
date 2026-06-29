@@ -304,11 +304,16 @@ def cargar_tablas_sise() -> dict:
 # columnas duplicadas que vuelvan ambigua cualquier referencia siguiente
 # (mismo problema y misma solucion que en unir_por_entidad).
 
-def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str = "left"):
+def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str = "left", alias_izq: str = None):
     der_alias = der.alias(alias_der)
     condicion = None
     for columna in columnas:
-        cond_col = izq[columna] == der_alias[columna]
+        # alias_izq se usa cuando el dataframe izquierdo ya acumulo varias
+        # tablas con columnas del mismo nombre (ej. FEC_ACTUALIZACION en mas
+        # de una tabla origen): hay que anclar a que alias especifico
+        # pertenece la columna del puente, si no la referencia es ambigua.
+        col_izq = izq[f"{alias_izq}.{columna}"] if alias_izq else izq[columna]
+        cond_col = col_izq == der_alias[columna]
         condicion = cond_col if condicion is None else (condicion & cond_col)
     unido = izq.join(der_alias, condicion, tipo)
     for columna in columnas:
@@ -336,14 +341,17 @@ def universo_persona_sise(tablas: dict):
     df = unir_por_llave_compuesta(
         df, tablas["ss_tmunicipio"],
         ["COD_MUNICIPIO", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "mun",
+        alias_izq="dir",
     )
     df = unir_por_llave_compuesta(
         df, tablas["ss_tpais"],
         ["COD_PAIS", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "pai",
+        alias_izq="dir",
     )
     df = unir_por_llave_compuesta(
         df, tablas["ss_tdpto"],
         ["COD_DPTO", "FEC_MOVIMIENTO", "PERIODO"], "dpt",
+        alias_izq="dir",
     )
     return df
 
