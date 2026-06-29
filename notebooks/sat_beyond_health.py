@@ -383,6 +383,12 @@ def universo_poliza_sise(tablas: dict):
     sg = unir_por_llave_compuesta(sg, tablas["ss_sg_di_benef"], ["ID_PV"], "sg_be")
     sg = sg.withColumn("TIPO_POLIZA", F.lit("SG"))
 
+    # Se dedupica cada rama ANTES del union: dentro de sv y de sg se
+    # acumulan columnas no-llave duplicadas (ej. COD_ASEG presente en mas
+    # de una tabla de la misma rama), y unionByName falla al alinear
+    # esquemas si alguna rama trae nombres repetidos.
+    sv = deduplicar_columnas(sv)
+    sg = deduplicar_columnas(sg)
     return sv.unionByName(sg, allowMissingColumns=True)
 
 # COMMAND ----------
