@@ -204,6 +204,9 @@ TBLPROPERTIES = {
     "delta.enableDeletionVectors": "false",
     "delta.enableIcebergCompatV2": "true",
     "delta.universalFormat.enabledFormats": "iceberg",
+    # la tabla es muy ancha; sin esto Delta solo indexa stats de las primeras
+    # 32 columnas y fecha_creacion (la columna de clustering) queda afuera.
+    "delta.dataSkippingNumIndexedCols": "-1",
 }
 
 # COMMAND ----------
