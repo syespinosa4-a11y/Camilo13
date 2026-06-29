@@ -230,3 +230,186 @@ spark.sql(f"DROP TABLE IF EXISTS {destino}")
     .clusterBy("fecha_creacion")
     .saveAsTable(destino)
 )
+
+# COMMAND ----------
+# ============================================================
+# sat_sise_pyc — segundo satelite en este mismo scrip (mismas
+# caracteristicas que sat_beyond_health: CONFIG centralizado,
+# PySpark puro sin SQL salvo el DROP TABLE de mantenimiento,
+# llaves dinamicas en lo posible).
+#
+# NOTA IMPORTANTE (pendiente de validar con datos reales):
+# SISE no usa el patron *_NCODE de beyond_health, las llaves
+# vienen explicitas por columna segun lo indicado. Dos puentes
+# fueron INFERIDOS por mi (no confirmados por el usuario), y
+# deben revisarse contra resultados reales en Databricks:
+#   1) Puente persona <-> poliza: se usa COD_ASEG (precedente
+#      del script SQL legado de vida/SISE).
+#   2) SV y SG se combinan por UNION (unionByName con
+#      allowMissingColumns=True) con un discriminador
+#      TIPO_POLIZA in ('SV','SG'), igual patron que
+#      TIPO_ENTIDAD en beyond_health (persona/institucion).
+# Si estas dos inferencias no calzan con la realidad de los
+# datos, son los dos puntos a corregir primero.
+#
+# ss_tciiu queda EXCLUIDA por instruccion explicita del usuario
+# (pendiente de confirmacion del equipo tecnico).
+# ============================================================
+
+CONFIG_SISE = {
+    "catalogo_fuente": "axa_col_dv",
+    "esquema_fuente": "core_sise",
+    "catalogo_destino": "uc_axa_cli",
+    "esquema_destino": "silver",
+    "tabla_destino": "sat_sise_pyc",
+    "id_columna_pk": "id_sat_sise_pyc",
+}
+
+TABLAS_SISE = [
+    "ss_mpersona",
+    "ss_mpersona_dir",
+    "ss_mpersona_telef",
+    "ss_sg_mpersona_aut_datos",
+    "ss_magente",
+    "ss_maseg_header",
+    "ss_tmunicipio",
+    "ss_tpais",
+    "ss_tdpto",
+    "ss_sv_pv_header",
+    "ss_sv_tramo",
+    "ss_sv_di_header",
+    "ss_sg_pv_header",
+    "ss_sg_tramo",
+    "ss_sg_di_header",
+    "ss_sg_di_benef",
+    # "ss_tciiu" excluida a peticion del usuario (pendiente confirmar).
+]
+
+# COMMAND ----------
+# Lectura generica de tablas SISE (mismo patron que fuente()/cargar_tablas_bh()).
+
+def fuente_sise(tabla_fisica: str):
+    catalogo = CONFIG_SISE["catalogo_fuente"]
+    esquema = CONFIG_SISE["esquema_fuente"]
+    return spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
+
+
+def cargar_tablas_sise() -> dict:
+    return {t: fuente_sise(t) for t in TABLAS_SISE}
+
+# COMMAND ----------
+# Join por llave compuesta explicita: ANDea igualdad de una lista de columnas
+# (mismo nombre en ambos lados, segun lo indicado por el usuario). Se descartan
+# las columnas de la llave del lado derecho tras el join, para no dejar
+# columnas duplicadas que vuelvan ambigua cualquier referencia siguiente
+# (mismo problema y misma solucion que en unir_por_entidad).
+
+def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str = "left"):
+    der_alias = der.alias(alias_der)
+    condicion = None
+    for columna in columnas:
+        cond_col = izq[columna] == der_alias[columna]
+        condicion = cond_col if condicion is None else (condicion & cond_col)
+    unido = izq.join(der_alias, condicion, tipo)
+    for columna in columnas:
+        unido = unido.drop(der_alias[columna])
+    return unido
+
+# COMMAND ----------
+# Universo persona: ss_mpersona como base, todo lo que se une por ID_PERSONA
+# directo (incluye ss_mpersona_telef SIN deduplicar: si una persona tiene
+# varios telefonos, debe quedar una fila por telefono, repitiendo el resto de
+# columnas). Luego se le pega a ss_mpersona_dir su puente geografico
+# (municipio/pais/dpto) por llave compuesta.
+
+def universo_persona_sise(tablas: dict):
+    base = tablas["ss_mpersona"].alias("per")
+
+    df = unir_por_llave_compuesta(base, tablas["ss_mpersona_dir"], ["ID_PERSONA"], "dir")
+    df = unir_por_llave_compuesta(df, tablas["ss_mpersona_telef"], ["ID_PERSONA"], "tel")
+    df = unir_por_llave_compuesta(df, tablas["ss_sg_mpersona_aut_datos"], ["ID_PERSONA"], "aut")
+    df = unir_por_llave_compuesta(df, tablas["ss_magente"], ["ID_PERSONA"], "age")
+    df = unir_por_llave_compuesta(df, tablas["ss_maseg_header"], ["ID_PERSONA"], "ase")
+
+    # Puente geografico de ss_mpersona_dir: cada catalogo se une por su propia
+    # llave compuesta indicada por el usuario.
+    df = unir_por_llave_compuesta(
+        df, tablas["ss_tmunicipio"],
+        ["COD_MUNICIPIO", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "mun",
+    )
+    df = unir_por_llave_compuesta(
+        df, tablas["ss_tpais"],
+        ["COD_PAIS", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "pai",
+    )
+    df = unir_por_llave_compuesta(
+        df, tablas["ss_tdpto"],
+        ["COD_DPTO", "FEC_MOVIMIENTO", "PERIODO"], "dpt",
+    )
+    return df
+
+# COMMAND ----------
+# Universo poliza: rama SV y rama SG, cada una con su propio sub-join interno
+# por COD_RAMO/ID_PV, unidas entre si por UNION con discriminador TIPO_POLIZA
+# (mismo patron que PERSONA/INSTITUCION en beyond_health). INFERIDO: el
+# usuario no confirmo si SV/SG deben unirse por UNION o por JOIN; se elige
+# UNION porque cada poliza es de un solo tipo (SV o SG), nunca ambos a la vez.
+
+def universo_poliza_sise(tablas: dict):
+    sv = tablas["ss_sv_pv_header"].alias("sv_pv")
+    sv = unir_por_llave_compuesta(sv, tablas["ss_sv_tramo"], ["COD_RAMO"], "sv_tr")
+    sv = unir_por_llave_compuesta(sv, tablas["ss_sv_di_header"], ["ID_PV"], "sv_di")
+    sv = sv.withColumn("TIPO_POLIZA", F.lit("SV"))
+
+    sg = tablas["ss_sg_pv_header"].alias("sg_pv")
+    sg = unir_por_llave_compuesta(sg, tablas["ss_sg_tramo"], ["COD_RAMO"], "sg_tr")
+    sg = unir_por_llave_compuesta(sg, tablas["ss_sg_di_header"], ["ID_PV"], "sg_di")
+    sg = unir_por_llave_compuesta(sg, tablas["ss_sg_di_benef"], ["ID_PV"], "sg_be")
+    sg = sg.withColumn("TIPO_POLIZA", F.lit("SG"))
+
+    return sv.unionByName(sg, allowMissingColumns=True)
+
+# COMMAND ----------
+# Construccion final: puente persona <-> poliza por COD_ASEG. INFERIDO del
+# precedente del script SQL legado de vida/SISE (no confirmado por el
+# usuario); es el primer punto a revisar si los conteos no calzan.
+
+def build_sat_sise_pyc():
+    tablas = cargar_tablas_sise()
+    personas = universo_persona_sise(tablas)
+    polizas = universo_poliza_sise(tablas)
+    return unir_por_llave_compuesta(personas, polizas, ["COD_ASEG"], "pol")
+
+# COMMAND ----------
+# Construccion final: una fila por (persona, telefono, poliza) segun los joins
+# anteriores, con id y fecha de carga, lista para sobrescribir el destino.
+# Reusa deduplicar_columnas/TBLPROPERTIES/LOAD_TS definidos para beyond_health.
+
+df_resultado_sise = deduplicar_columnas(build_sat_sise_pyc())
+df_resultado_sise = df_resultado_sise.withColumn(
+    CONFIG_SISE["id_columna_pk"], F.monotonically_increasing_id()
+)
+df_resultado_sise = df_resultado_sise.withColumn("dv_load_date", F.lit(LOAD_TS))
+df_resultado_sise = df_resultado_sise.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
+
+print("filas sat_sise_pyc:", df_resultado_sise.count())
+df_resultado_sise.printSchema()
+
+# COMMAND ----------
+# Mantenimiento (no es logica del satelite): se elimina la tabla destino si
+# ya existia con Deletion Vectors fisicamente escritos de corridas previas.
+
+destino_sise = f"`{CONFIG_SISE['catalogo_destino']}`.`{CONFIG_SISE['esquema_destino']}`.`{CONFIG_SISE['tabla_destino']}`"
+spark.sql(f"DROP TABLE IF EXISTS {destino_sise}")
+
+# COMMAND ----------
+# Escritura a Delta: mismo patron de propiedades y liquid clustering que
+# sat_beyond_health.
+
+(
+    df_resultado_sise.write.format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .options(**TBLPROPERTIES)
+    .clusterBy("fecha_creacion")
+    .saveAsTable(destino_sise)
+)
