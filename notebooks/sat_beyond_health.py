@@ -128,9 +128,15 @@ def unir_por_entidad(base, tabla, alias: str):
 # (ej. bh_sa_member), se cruzan contra otra tabla ya unida (ej. affiliation_contract)
 # usando la llave *_NCODE que tengan en comun (detectada dinamicamente, no quemada).
 
-def unir_por_puente(df, alias_referencia: str, tabla_referencia_original, tabla_nueva, alias_nueva: str):
+def unir_por_puente(df, alias_referencia: str, tabla_referencia_original, tabla_nueva, alias_nueva: str, broadcast: bool = False):
     llave_izq, llave_der = llave_comun(tabla_referencia_original, tabla_nueva)
     tabla_alias = tabla_nueva.alias(alias_nueva)
+    if broadcast:
+        # bh_sa_member es una tabla de afiliacion chica frente al universo de
+        # entidades; forzar broadcast evita un shuffle costoso de ambos lados
+        # cuando Unity Catalog no tiene stats que permitan a Spark decidirlo
+        # solo (broadcast join automatico).
+        tabla_alias = F.broadcast(tabla_alias)
     return df.join(
         tabla_alias,
         df[f"{alias_referencia}.{llave_izq}"] == tabla_alias[llave_der],
@@ -146,13 +152,16 @@ def build_sat_beyond_health():
     base = base_entidades(tablas)
     df = unir_por_entidad(base, tablas["bh_sa_address"], "addr")
     df = unir_por_entidad(df, tablas["bh_sa_affiliation_contract"], "aco")
-    df = unir_por_puente(df, "aco", tablas["bh_sa_affiliation_contract"], tablas["bh_sa_member"], "mem")
+    df = unir_por_puente(df, "aco", tablas["bh_sa_affiliation_contract"], tablas["bh_sa_member"], "mem", broadcast=True)
 
+    # bh_sa_city es catalogo de referencia (pocas filas): se fuerza broadcast
+    # para evitar un shuffle innecesario contra el universo ya unido, que es
+    # mucho mas grande.
     ciu = tablas["bh_sa_city"]
     llave_addr, llave_ciu_addr = llave_comun(tablas["bh_sa_address"], ciu)
 
     df = df.join(
-        ciu.alias("ciu"),
+        F.broadcast(ciu.alias("ciu")),
         df[f"addr.{llave_addr}"] == F.col(f"ciu.{llave_ciu_addr}"),
         "left",
     )
@@ -191,6 +200,15 @@ def deduplicar_columnas(df):
     return df.toDF(*nuevos)
 
 # COMMAND ----------
+# Resultado final en minuscula sostenida: se aplica como ultimo paso, despues
+# de deduplicar y de agregar el id/fechas, para que TODAS las columnas del
+# satelite (de cualquier tabla origen) queden homogeneas sin importar el
+# casing original de cada fuente.
+
+def minusculizar_columnas(df):
+    return df.toDF(*[c.lower() for c in df.columns])
+
+# COMMAND ----------
 # Construccion final: una fila por entidad (no una fila por tabla origen),
 # con id y fecha de carga, lista para sobrescribir el destino.
 
@@ -198,6 +216,11 @@ df_resultado = deduplicar_columnas(build_sat_beyond_health())
 df_resultado = df_resultado.withColumn(CONFIG["id_columna_pk"], F.monotonically_increasing_id())
 df_resultado = df_resultado.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado = df_resultado.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
+df_resultado = minusculizar_columnas(df_resultado)
+
+# Se cachea ANTES del count(): sin cache, el count() y la escritura posterior
+# recalculan todo el pipeline de joins por separado (el doble de trabajo).
+df_resultado = df_resultado.cache()
 
 print("filas:", df_resultado.count())
 df_resultado.printSchema()
@@ -240,6 +263,7 @@ spark.sql(f"DROP TABLE IF EXISTS {destino}")
     .clusterBy("fecha_creacion")
     .saveAsTable(destino)
 )
+df_resultado.unpersist()
 
 # COMMAND ----------
 # ============================================================
@@ -314,7 +338,7 @@ def cargar_tablas_sise() -> dict:
 # columnas duplicadas que vuelvan ambigua cualquier referencia siguiente
 # (mismo problema y misma solucion que en unir_por_entidad).
 
-def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str = "left", alias_izq: str = None):
+def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str = "left", alias_izq: str = None, broadcast: bool = False):
     # El nombre real de cada columna se resuelve case-insensitive (mismo
     # motivo que en llave_comun): las tablas SISE no garantizan la misma
     # mayuscula/minuscula para una misma columna logica entre dos tablas
@@ -323,6 +347,11 @@ def unir_por_llave_compuesta(izq, der, columnas: list, alias_der: str, tipo: str
     # no logra resolver mas adelante ([COLUMN_ALREADY_EXISTS]).
     mapa_der = _mapa_columnas(der)
     der_alias = der.alias(alias_der)
+    if broadcast:
+        # Catalogos de referencia (municipio, pais, dpto, tramo): muchas
+        # menos filas que el universo persona/poliza ya unido, forzar
+        # broadcast evita un shuffle costoso de ambos lados.
+        der_alias = F.broadcast(der_alias)
     condicion = None
     for columna in columnas:
         # alias_izq se usa cuando el dataframe izquierdo ya acumulo varias
@@ -360,17 +389,17 @@ def universo_persona_sise(tablas: dict):
     df = unir_por_llave_compuesta(
         df, tablas["ss_tmunicipio"],
         ["COD_MUNICIPIO", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "mun",
-        alias_izq="dir",
+        alias_izq="dir", broadcast=True,
     )
     df = unir_por_llave_compuesta(
         df, tablas["ss_tpais"],
         ["COD_PAIS", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "pai",
-        alias_izq="dir",
+        alias_izq="dir", broadcast=True,
     )
     df = unir_por_llave_compuesta(
         df, tablas["ss_tdpto"],
         ["COD_DPTO", "FEC_MOVIMIENTO", "PERIODO"], "dpt",
-        alias_izq="dir",
+        alias_izq="dir", broadcast=True,
     )
     return df
 
@@ -383,12 +412,12 @@ def universo_persona_sise(tablas: dict):
 
 def universo_poliza_sise(tablas: dict):
     sv = tablas["ss_sv_pv_header"].alias("sv_pv")
-    sv = unir_por_llave_compuesta(sv, tablas["ss_sv_tramo"], ["COD_RAMO"], "sv_tr")
+    sv = unir_por_llave_compuesta(sv, tablas["ss_sv_tramo"], ["COD_RAMO"], "sv_tr", broadcast=True)
     sv = unir_por_llave_compuesta(sv, tablas["ss_sv_di_header"], ["ID_PV"], "sv_di")
     sv = sv.withColumn("TIPO_POLIZA", F.lit("SV"))
 
     sg = tablas["ss_sg_pv_header"].alias("sg_pv")
-    sg = unir_por_llave_compuesta(sg, tablas["ss_sg_tramo"], ["COD_RAMO"], "sg_tr")
+    sg = unir_por_llave_compuesta(sg, tablas["ss_sg_tramo"], ["COD_RAMO"], "sg_tr", broadcast=True)
     sg = unir_por_llave_compuesta(sg, tablas["ss_sg_di_header"], ["ID_PV"], "sg_di")
     sg = unir_por_llave_compuesta(sg, tablas["ss_sg_di_benef"], ["ID_PV"], "sg_be")
     sg = sg.withColumn("TIPO_POLIZA", F.lit("SG"))
@@ -428,6 +457,11 @@ df_resultado_sise = df_resultado_sise.withColumn(
 )
 df_resultado_sise = df_resultado_sise.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado_sise = df_resultado_sise.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
+df_resultado_sise = minusculizar_columnas(df_resultado_sise)
+
+# Se cachea ANTES del count(): mismo motivo que en sat_beyond_health (evitar
+# recalcular todo el pipeline de joins dos veces).
+df_resultado_sise = df_resultado_sise.cache()
 
 print("filas sat_sise_pyc:", df_resultado_sise.count())
 df_resultado_sise.printSchema()
@@ -451,3 +485,4 @@ spark.sql(f"DROP TABLE IF EXISTS {destino_sise}")
     .clusterBy("fecha_creacion")
     .saveAsTable(destino_sise)
 )
+df_resultado_sise.unpersist()
