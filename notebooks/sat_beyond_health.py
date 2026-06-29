@@ -200,6 +200,8 @@ TBLPROPERTIES = {
     "delta.enableChangeDataFeed": "true",
     "delta.autoOptimize.optimizeWrite": "true",
     "delta.feature.allowColumnDefaults": "supported",
+    # IcebergCompatV2 exige Deletion Vectors deshabilitados.
+    "delta.enableDeletionVectors": "false",
     "delta.enableIcebergCompatV2": "true",
     "delta.universalFormat.enabledFormats": "iceberg",
 }
