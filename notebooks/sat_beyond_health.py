@@ -383,8 +383,13 @@ def universo_poliza_sise(tablas: dict):
 
 def build_sat_sise_pyc():
     tablas = cargar_tablas_sise()
-    personas = universo_persona_sise(tablas)
-    polizas = universo_poliza_sise(tablas)
+    # Se dedupica cada universo ANTES del puente final: varias tablas dentro
+    # de cada universo (ej. ss_magente y ss_maseg_header en personas) traen
+    # su propia columna COD_ASEG sin que ningun join previo la haya usado
+    # como llave, asi que llega duplicada y la referencia COD_ASEG del
+    # puente final queda ambigua (COLUMN_ALREADY_EXISTS al resolver esquema).
+    personas = deduplicar_columnas(universo_persona_sise(tablas))
+    polizas = deduplicar_columnas(universo_poliza_sise(tablas))
     return unir_por_llave_compuesta(personas, polizas, ["COD_ASEG"], "pol")
 
 # COMMAND ----------
