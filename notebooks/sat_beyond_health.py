@@ -207,11 +207,18 @@ TBLPROPERTIES = {
 }
 
 # COMMAND ----------
+# Mantenimiento (no es logica del satelite): se elimina la tabla destino si
+# ya existia con Deletion Vectors fisicamente escritos de corridas previas,
+# para poder recrearla limpia con IcebergCompatV2 habilitado.
+
+destino = f"`{CONFIG['catalogo_destino']}`.`{CONFIG['esquema_destino']}`.`{CONFIG['tabla_destino']}`"
+spark.sql(f"DROP TABLE IF EXISTS {destino}")
+
+# COMMAND ----------
 # Escritura a Delta: sobrescribe completo (son pruebas, la tabla destino
 # tenia la version vieja por union, con filas repetidas por tabla origen).
 # Cluster by fecha_creacion en lugar de particionar.
 
-destino = f"`{CONFIG['catalogo_destino']}`.`{CONFIG['esquema_destino']}`.`{CONFIG['tabla_destino']}`"
 (
     df_resultado.write.format("delta")
     .mode("overwrite")
