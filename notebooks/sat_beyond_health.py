@@ -28,9 +28,17 @@ spark = SparkSession.builder.getOrCreate()
 spark.conf.set("spark.sql.adaptive.enabled", "true")
 spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
 spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
-# Directorio de checkpoints: trunca el linaje del DAG en puntos clave
-# para que Spark no recalcule todo el pipeline desde cero en cada accion.
-spark.sparkContext.setCheckpointDir("dbfs:/tmp/checkpoints/satelites/")
+
+# Materializa un DataFrame a una ruta Delta temporal y lo lee de vuelta:
+# mismo efecto que checkpoint() (trunca el linaje del DAG y evita
+# recalcular desde cero), pero sin usar sparkContext, que esta bloqueado
+# en clusters compartidos de Unity Catalog.
+_CKPT_BASE = "dbfs:/tmp/sat_checkpoints"
+
+def _materializar(df, nombre: str):
+    ruta = f"{_CKPT_BASE}/{nombre}"
+    df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(ruta)
+    return spark.read.format("delta").load(ruta)
 
 # COMMAND ----------
 # Configuracion (unico punto a editar; futuro reemplazo = leer de DIM_PARAMETROS)
@@ -160,10 +168,7 @@ def unir_por_puente(df, alias_referencia: str, tabla_referencia_original, tabla_
 def build_sat_beyond_health():
     tablas = cargar_tablas_bh()
 
-    # Checkpoint tras la union PERSONA/INSTITUCION: materializa el universo
-    # base en disco y trunca el linaje, para que los joins siguientes no
-    # arrastren el plan de la union en cada etapa.
-    base = base_entidades(tablas).checkpoint()
+    base = _materializar(base_entidades(tablas), "bh_base_entidades")
     df = unir_por_entidad(base, tablas["bh_sa_address"], "addr")
     df = unir_por_entidad(df, tablas["bh_sa_affiliation_contract"], "aco")
     df = unir_por_puente(df, "aco", tablas["bh_sa_affiliation_contract"], tablas["bh_sa_member"], "mem", broadcast=True)
@@ -232,10 +237,7 @@ df_resultado = df_resultado.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado = df_resultado.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 df_resultado = minusculizar_columnas(df_resultado)
 
-# Checkpoint final: trunca el linaje acumulado por deduplicar + withColumns.
-# A diferencia de cache(), escribe a disco (no falla si el cluster no tiene
-# RAM suficiente) y garantiza que el write Delta no recalcula desde cero.
-df_resultado = df_resultado.checkpoint()
+df_resultado = _materializar(df_resultado, "bh_resultado_final")
 
 df_resultado.printSchema()
 
@@ -459,8 +461,8 @@ def build_sat_sise_pyc():
     # optimizar cada etapa con estadisticas reales. Sin checkpoint, el join
     # final arrastra todo el linaje de ambos universos y el plan se vuelve
     # inmanejable para tablas de millones de filas.
-    personas = deduplicar_columnas(universo_persona_sise(tablas)).checkpoint()
-    polizas = deduplicar_columnas(universo_poliza_sise(tablas)).checkpoint()
+    personas = _materializar(deduplicar_columnas(universo_persona_sise(tablas)), "sise_personas")
+    polizas = _materializar(deduplicar_columnas(universo_poliza_sise(tablas)), "sise_polizas")
     return unir_por_llave_compuesta(personas, polizas, ["COD_ASEG"], "pol")
 
 # COMMAND ----------
@@ -475,7 +477,7 @@ df_resultado_sise = df_resultado_sise.withColumn(
 df_resultado_sise = df_resultado_sise.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado_sise = df_resultado_sise.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 df_resultado_sise = minusculizar_columnas(df_resultado_sise)
-df_resultado_sise = df_resultado_sise.checkpoint()
+df_resultado_sise = _materializar(df_resultado_sise, "sise_resultado_final")
 
 df_resultado_sise.printSchema()
 
