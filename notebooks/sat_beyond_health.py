@@ -21,6 +21,17 @@ from datetime import datetime, timezone
 
 spark = SparkSession.builder.getOrCreate()
 
+# AQF (Adaptive Query Framework): ajusta el plan en tiempo de ejecucion
+# segun estadisticas reales (particiones, skew, broadcast dinamico).
+# Suele estar activo en Databricks >= 10.x, pero se fuerza para garantizar
+# que aplica sin importar la config del cluster.
+spark.conf.set("spark.sql.adaptive.enabled", "true")
+spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
+spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+# Directorio de checkpoints: trunca el linaje del DAG en puntos clave
+# para que Spark no recalcule todo el pipeline desde cero en cada accion.
+spark.sparkContext.setCheckpointDir("dbfs:/tmp/checkpoints/satelites/")
+
 # COMMAND ----------
 # Configuracion (unico punto a editar; futuro reemplazo = leer de DIM_PARAMETROS)
 
@@ -149,7 +160,10 @@ def unir_por_puente(df, alias_referencia: str, tabla_referencia_original, tabla_
 def build_sat_beyond_health():
     tablas = cargar_tablas_bh()
 
-    base = base_entidades(tablas)
+    # Checkpoint tras la union PERSONA/INSTITUCION: materializa el universo
+    # base en disco y trunca el linaje, para que los joins siguientes no
+    # arrastren el plan de la union en cada etapa.
+    base = base_entidades(tablas).checkpoint()
     df = unir_por_entidad(base, tablas["bh_sa_address"], "addr")
     df = unir_por_entidad(df, tablas["bh_sa_affiliation_contract"], "aco")
     df = unir_por_puente(df, "aco", tablas["bh_sa_affiliation_contract"], tablas["bh_sa_member"], "mem", broadcast=True)
@@ -218,11 +232,11 @@ df_resultado = df_resultado.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado = df_resultado.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 df_resultado = minusculizar_columnas(df_resultado)
 
-# Se cachea ANTES del count(): sin cache, el count() y la escritura posterior
-# recalculan todo el pipeline de joins por separado (el doble de trabajo).
-df_resultado = df_resultado.cache()
+# Checkpoint final: trunca el linaje acumulado por deduplicar + withColumns.
+# A diferencia de cache(), escribe a disco (no falla si el cluster no tiene
+# RAM suficiente) y garantiza que el write Delta no recalcula desde cero.
+df_resultado = df_resultado.checkpoint()
 
-print("filas:", df_resultado.count())
 df_resultado.printSchema()
 
 # COMMAND ----------
@@ -263,7 +277,9 @@ spark.sql(f"DROP TABLE IF EXISTS {destino}")
     .clusterBy("fecha_creacion")
     .saveAsTable(destino)
 )
-df_resultado.unpersist()
+# Conteo barato DESPUES del write: lee de la tabla Delta ya escrita,
+# no recalcula el pipeline (cero costo adicional de computo).
+print("filas sat_beyond_health:", spark.table(destino).count())
 
 # COMMAND ----------
 # ============================================================
@@ -437,13 +453,14 @@ def universo_poliza_sise(tablas: dict):
 
 def build_sat_sise_pyc():
     tablas = cargar_tablas_sise()
-    # Se dedupica cada universo ANTES del puente final: varias tablas dentro
-    # de cada universo (ej. ss_magente y ss_maseg_header en personas) traen
-    # su propia columna COD_ASEG sin que ningun join previo la haya usado
-    # como llave, asi que llega duplicada y la referencia COD_ASEG del
-    # puente final queda ambigua (COLUMN_ALREADY_EXISTS al resolver esquema).
-    personas = deduplicar_columnas(universo_persona_sise(tablas))
-    polizas = deduplicar_columnas(universo_poliza_sise(tablas))
+    # Checkpoint de cada universo por separado: materializa personas en disco
+    # ANTES de computar polizas, y viceversa. Esto impide que Spark construya
+    # un plan gigante (personas * polizas en un solo DAG) y le permite a AQF
+    # optimizar cada etapa con estadisticas reales. Sin checkpoint, el join
+    # final arrastra todo el linaje de ambos universos y el plan se vuelve
+    # inmanejable para tablas de millones de filas.
+    personas = deduplicar_columnas(universo_persona_sise(tablas)).checkpoint()
+    polizas = deduplicar_columnas(universo_poliza_sise(tablas)).checkpoint()
     return unir_por_llave_compuesta(personas, polizas, ["COD_ASEG"], "pol")
 
 # COMMAND ----------
@@ -458,12 +475,8 @@ df_resultado_sise = df_resultado_sise.withColumn(
 df_resultado_sise = df_resultado_sise.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado_sise = df_resultado_sise.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 df_resultado_sise = minusculizar_columnas(df_resultado_sise)
+df_resultado_sise = df_resultado_sise.checkpoint()
 
-# Se cachea ANTES del count(): mismo motivo que en sat_beyond_health (evitar
-# recalcular todo el pipeline de joins dos veces).
-df_resultado_sise = df_resultado_sise.cache()
-
-print("filas sat_sise_pyc:", df_resultado_sise.count())
 df_resultado_sise.printSchema()
 
 # COMMAND ----------
@@ -485,4 +498,4 @@ spark.sql(f"DROP TABLE IF EXISTS {destino_sise}")
     .clusterBy("fecha_creacion")
     .saveAsTable(destino_sise)
 )
-df_resultado_sise.unpersist()
+print("filas sat_sise_pyc:", spark.table(destino_sise).count())
