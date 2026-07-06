@@ -409,22 +409,41 @@ def universo_persona_sise(tablas: dict):
     df = unir_por_llave_compuesta(df, tablas["ss_magente"], ["ID_PERSONA"], "age")
     df = unir_por_llave_compuesta(df, tablas["ss_maseg_header"], ["ID_PERSONA"], "ase")
 
-    # Puente geografico de ss_mpersona_dir: cada catalogo se une por su propia
-    # llave compuesta indicada por el usuario.
+    # Corte de linaje entre la etapa de persona y la etapa geografica.
+    # Sin este corte, los 8 joins siguientes se computan en un solo DAG
+    # gigante que puede tardar 30+ minutos solo en la etapa de shuffle.
+    # Tras deduplicar, las columnas geo de ss_mpersona_dir (COD_MUNICIPIO,
+    # FEC_ACTUALIZACION, FECHA_CARGUE, COD_PAIS, COD_DPTO, FEC_MOVIMIENTO,
+    # PERIODO) son nombres unicos en el resultado intermedio, lo que permite
+    # suprimir alias_izq="dir" en los joins siguientes (el alias se pierde
+    # al leer de vuelta desde Delta).
+    # Supuesto: ss_mpersona no tiene esas columnas geograficas; si las
+    # tuviera, el primer join geografico tomaria la columna de ss_mpersona
+    # en lugar de la de ss_mpersona_dir — validar contra el esquema real.
+    df = _materializar(deduplicar_columnas(df), "sise_per_sin_geo")
+
+    # Puente geografico. Los catalogos geo son tablas pequenas (broadcast).
+    # Tras el materialize anterior las columnas son unicas; entre cada join
+    # se llama deduplicar_columnas (lazy = solo renombrado de esquema, sin
+    # computo adicional) para neutralizar cualquier duplicado que el catalogo
+    # geo introduzca (ej. COD_PAIS en ss_tmunicipio, FEC_ACTUALIZACION en
+    # ss_tpais) antes del siguiente join, evitando [AMBIGUOUS_REFERENCE].
     df = unir_por_llave_compuesta(
         df, tablas["ss_tmunicipio"],
         ["COD_MUNICIPIO", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "mun",
-        alias_izq="dir", broadcast=True,
+        broadcast=True,
     )
+    df = deduplicar_columnas(df)
     df = unir_por_llave_compuesta(
         df, tablas["ss_tpais"],
         ["COD_PAIS", "FEC_ACTUALIZACION", "FECHA_CARGUE"], "pai",
-        alias_izq="dir", broadcast=True,
+        broadcast=True,
     )
+    df = deduplicar_columnas(df)
     df = unir_por_llave_compuesta(
         df, tablas["ss_tdpto"],
         ["COD_DPTO", "FEC_MOVIMIENTO", "PERIODO"], "dpt",
-        alias_izq="dir", broadcast=True,
+        broadcast=True,
     )
     return df
 
