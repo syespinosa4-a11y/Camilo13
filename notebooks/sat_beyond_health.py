@@ -28,6 +28,13 @@ spark = SparkSession.builder.getOrCreate()
 spark.conf.set("spark.sql.adaptive.enabled", "true")
 spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
 spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+# Particiones objetivo mas pequenas (64 MB vs 256 MB defecto Databricks):
+# evita que AQF consolide demasiadas filas en una sola tarea y provoque OOM
+# en tablas muy anchas como sat_sise_pyc (cientos de columnas por fila).
+spark.conf.set("spark.sql.adaptive.advisoryPartitionSizeInBytes", str(64 * 1024 * 1024))
+# Punto de partida alto para shuffle: AQF coalesce desde 400 a lo necesario
+# segun estadisticas reales; subir desde 200 (defecto) da mas granularidad.
+spark.conf.set("spark.sql.shuffle.partitions", "400")
 
 # Materializa un DataFrame a una ruta Delta temporal y lo lee de vuelta:
 # mismo efecto que checkpoint() (trunca el linaje del DAG y evita
@@ -446,6 +453,14 @@ def universo_poliza_sise(tablas: dict):
     # esquemas si alguna rama trae nombres repetidos.
     sv = deduplicar_columnas(sv)
     sg = deduplicar_columnas(sg)
+    # Se materializa cada rama POR SEPARADO antes del union: trunca el linaje
+    # de SV y SG de forma independiente. Sin esto, Spark construye un DAG unico
+    # SV+SG y al moment del write final asigna todo el computo a las mismas
+    # tareas, generando particiones de cientos de MB que revientan con OOM
+    # (codigo 137 / sigkill del kernel). Cada rama es chica por separado;
+    # el problema es fusionarlas sin intermedios en disco.
+    sv = _materializar(sv, "sise_sv")
+    sg = _materializar(sg, "sise_sg")
     return sv.unionByName(sg, allowMissingColumns=True)
 
 # COMMAND ----------
@@ -477,6 +492,12 @@ df_resultado_sise = df_resultado_sise.withColumn(
 df_resultado_sise = df_resultado_sise.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado_sise = df_resultado_sise.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 df_resultado_sise = minusculizar_columnas(df_resultado_sise)
+# repartition explicito antes de materializar: el join personas x polizas por
+# COD_ASEG puede dejar particiones muy sesgadas si COD_ASEG no esta bien
+# distribuido (muchos nulos o un valor dominante). Con 400 particiones y
+# advisoryPartitionSizeInBytes=64MB, AQF tiene suficiente granularidad para
+# evitar que una sola tarea acumule cientos de MB y sea asesinada por OOM.
+df_resultado_sise = df_resultado_sise.repartition(400)
 df_resultado_sise = _materializar(df_resultado_sise, "sise_resultado_final")
 
 df_resultado_sise.printSchema()
