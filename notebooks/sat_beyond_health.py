@@ -57,6 +57,11 @@ CONFIG = {
     "esquema_destino": "silver",
     "tabla_destino": "sat_beyond_health",
     "id_columna_pk": "id_sat_beyond_health",
+    # MODO_PRUEBA=True aplica .limit(LIMITE_FILAS) en cada tabla fuente.
+    # Usar para validar logica rapidamente sin procesar todos los datos.
+    # Cambiar a False para la carga completa de produccion.
+    "modo_prueba": True,
+    "limite_filas": 50_000,
 }
 
 LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -76,7 +81,10 @@ TABLAS_BH = [
 def fuente(tabla_fisica: str):
     catalogo = CONFIG["catalogo_fuente"]
     esquema = CONFIG["esquema_fuente"]
-    return spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
+    df = spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
+    if CONFIG.get("modo_prueba"):
+        df = df.limit(CONFIG["limite_filas"])
+    return df
 
 
 def cargar_tablas_bh() -> dict:
@@ -322,6 +330,9 @@ CONFIG_SISE = {
     "esquema_destino": "silver",
     "tabla_destino": "sat_sise_pyc",
     "id_columna_pk": "id_sat_sise_pyc",
+    # Mismo flag que CONFIG: True para pruebas rapidas, False para produccion.
+    "modo_prueba": True,
+    "limite_filas": 50_000,
 }
 
 TABLAS_SISE = [
@@ -350,7 +361,10 @@ TABLAS_SISE = [
 def fuente_sise(tabla_fisica: str):
     catalogo = CONFIG_SISE["catalogo_fuente"]
     esquema = CONFIG_SISE["esquema_fuente"]
-    return spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
+    df = spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
+    if CONFIG_SISE.get("modo_prueba"):
+        df = df.limit(CONFIG_SISE["limite_filas"])
+    return df
 
 
 def cargar_tablas_sise() -> dict:
