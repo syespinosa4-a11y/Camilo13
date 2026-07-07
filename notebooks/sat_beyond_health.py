@@ -36,6 +36,15 @@ spark.conf.set("spark.sql.adaptive.advisoryPartitionSizeInBytes", str(64 * 1024 
 # segun estadisticas reales; subir desde 200 (defecto) da mas granularidad.
 spark.conf.set("spark.sql.shuffle.partitions", "400")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MODO_PRUEBA — controla todo el comportamiento de muestreo desde un solo lugar.
+#   True  → sample(0.5 %) por tabla, coalesce(4) antes de cada write a Delta.
+#           Ideal para validar logica en minutos sin procesar el universo completo.
+#   False → datos completos, reparticion plena para produccion.
+# Cambia SOLO esta linea al alternar entre entornos.
+MODO_PRUEBA = True
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Materializa un DataFrame a una ruta Delta temporal y lo lee de vuelta:
 # mismo efecto que checkpoint() (trunca el linaje del DAG y evita
 # recalcular desde cero), pero sin usar sparkContext, que esta bloqueado
@@ -44,6 +53,11 @@ _CKPT_BASE = "dbfs:/tmp/sat_checkpoints"
 
 def _materializar(df, nombre: str):
     ruta = f"{_CKPT_BASE}/{nombre}"
+    # En prueba, coalescer a pocas particiones antes de escribir: con datos
+    # pequenos, 400 particiones = cientos de archivos de pocos bytes, y el
+    # overhead de metadatos Delta supera al I/O real (escribe muy lento).
+    if MODO_PRUEBA:
+        df = df.coalesce(4)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(ruta)
     return spark.read.format("delta").load(ruta)
 
@@ -57,11 +71,6 @@ CONFIG = {
     "esquema_destino": "silver",
     "tabla_destino": "sat_beyond_health",
     "id_columna_pk": "id_sat_beyond_health",
-    # MODO_PRUEBA=True aplica .limit(LIMITE_FILAS) en cada tabla fuente.
-    # Usar para validar logica rapidamente sin procesar todos los datos.
-    # Cambiar a False para la carga completa de produccion.
-    "modo_prueba": True,
-    "limite_filas": 50_000,
 }
 
 LOAD_TS = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -82,8 +91,11 @@ def fuente(tabla_fisica: str):
     catalogo = CONFIG["catalogo_fuente"]
     esquema = CONFIG["esquema_fuente"]
     df = spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
-    if CONFIG.get("modo_prueba"):
-        df = df.limit(CONFIG["limite_filas"])
+    if MODO_PRUEBA:
+        # sample() mantiene el paralelismo (datos distribuidos en varias
+        # particiones); limit() colapsa a 1 particion y hace los joins
+        # siguientes mucho mas lentos.
+        df = df.sample(withReplacement=False, fraction=0.005, seed=42)
     return df
 
 
@@ -330,9 +342,6 @@ CONFIG_SISE = {
     "esquema_destino": "silver",
     "tabla_destino": "sat_sise_pyc",
     "id_columna_pk": "id_sat_sise_pyc",
-    # Mismo flag que CONFIG: True para pruebas rapidas, False para produccion.
-    "modo_prueba": True,
-    "limite_filas": 50_000,
 }
 
 TABLAS_SISE = [
@@ -362,8 +371,8 @@ def fuente_sise(tabla_fisica: str):
     catalogo = CONFIG_SISE["catalogo_fuente"]
     esquema = CONFIG_SISE["esquema_fuente"]
     df = spark.table(f"`{catalogo}`.`{esquema}`.`{tabla_fisica}`")
-    if CONFIG_SISE.get("modo_prueba"):
-        df = df.limit(CONFIG_SISE["limite_filas"])
+    if MODO_PRUEBA:
+        df = df.sample(withReplacement=False, fraction=0.005, seed=42)
     return df
 
 
@@ -525,12 +534,12 @@ df_resultado_sise = df_resultado_sise.withColumn(
 df_resultado_sise = df_resultado_sise.withColumn("dv_load_date", F.lit(LOAD_TS))
 df_resultado_sise = df_resultado_sise.withColumn("fecha_creacion", F.to_date(F.lit(LOAD_TS)))
 df_resultado_sise = minusculizar_columnas(df_resultado_sise)
-# repartition explicito antes de materializar: el join personas x polizas por
-# COD_ASEG puede dejar particiones muy sesgadas si COD_ASEG no esta bien
-# distribuido (muchos nulos o un valor dominante). Con 400 particiones y
-# advisoryPartitionSizeInBytes=64MB, AQF tiene suficiente granularidad para
-# evitar que una sola tarea acumule cientos de MB y sea asesinada por OOM.
-df_resultado_sise = df_resultado_sise.repartition(400)
+# En produccion: repartition(400) evita OOM cuando el join personas x polizas
+# produce particiones muy sesgadas (COD_ASEG con muchos nulos o valor dominante).
+# En prueba: los datos ya son pequeños; reparticion alta solo genera cientos de
+# archivos Delta vacios que ralentizan el write (overhead de metadatos).
+if not MODO_PRUEBA:
+    df_resultado_sise = df_resultado_sise.repartition(400)
 df_resultado_sise = _materializar(df_resultado_sise, "sise_resultado_final")
 
 df_resultado_sise.printSchema()
