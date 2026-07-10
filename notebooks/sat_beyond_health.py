@@ -206,11 +206,9 @@ df_titular = (
     .join(person,
           affiliation_contract[_l("titular_persona")[0]] == person[_l("titular_persona")[1]],
           how="left")
-    .drop(person[_l("titular_persona")[1]])      # elimina per_ncode duplicado de person
     .join(institution,
           affiliation_contract[_l("titular_institucion")[0]] == institution[_l("titular_institucion")[1]],
           how="left")
-    .drop(institution[_l("titular_institucion")[1]])  # elimina ins_ncode duplicado de institution
     .join(df_residencial,
           affiliation_contract[_l("titular_residencial")[0]] == df_residencial[_l("titular_residencial")[1]],
           how="left")
@@ -238,11 +236,9 @@ df_beneficiario = (
     .join(person,
           member[_l("beneficiario_persona")[0]] == person[_l("beneficiario_persona")[1]],
           how="left")
-    .drop(person[_l("beneficiario_persona")[1]])      # elimina per_ncode duplicado de person
     .join(institution,
           affiliation_contract[_l("beneficiario_institucion")[0]] == institution[_l("beneficiario_institucion")[1]],
           how="left")
-    .drop(institution[_l("beneficiario_institucion")[1]])  # elimina ins_ncode duplicado de institution
     .join(df_residencial,
           member[_l("beneficiario_residencial")[0]] == df_residencial[_l("beneficiario_residencial")[1]],
           how="left")
