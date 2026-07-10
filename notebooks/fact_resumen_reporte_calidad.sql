@@ -4,6 +4,7 @@
 -- Ámbitos: Regla, Grupo Regla, Cliente, Atributo, Fuente
 -- ============================================================
 
+-- porcentaje_calidad siempre calculado: cant_validos / cant_evaluados * 100
 -- ── Vista general: una fila por ámbito con totales ──────────
 SELECT
     ambito,
@@ -133,8 +134,8 @@ SELECT
         / NULLIF(cant_evaluados, 0)
     , 2)                AS porcentaje_calidad,
     CASE
-        WHEN (cant_validos * 100.0 / NULLIF(cant_evaluados, 0)) >= 95 THEN 'VERDE'
-        WHEN (cant_validos * 100.0 / NULLIF(cant_evaluados, 0)) >= 80 THEN 'AMARILLO'
+        WHEN ROUND(cant_validos * 100.0 / NULLIF(cant_evaluados, 0), 2) >= 95 THEN 'VERDE'
+        WHEN ROUND(cant_validos * 100.0 / NULLIF(cant_evaluados, 0), 2) >= 80 THEN 'AMARILLO'
         ELSE 'ROJO'
     END                 AS semaforo_calidad
 FROM  uc_axa_cli.gold.fact_resumen_reporte_calidad
