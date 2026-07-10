@@ -49,6 +49,7 @@ RENOMBRES = {
         "cit_ncode": "add_cit_ncode",   # llave hacia city en address
     },
     "bh_sa_member": {
+        "aco_ncode": "mem_aco_ncode",   # FK al contrato: evita colision con aco.aco_ncode en el join
         "per_ncode": "mem_per_ncode",   # beneficiario viene del member
         "ins_ncode": "mem_ins_ncode",   # ins_ncode de member choca con institution.ins_ncode
     },
@@ -57,7 +58,7 @@ RENOMBRES = {
 # Llaves de join entre tablas (izquierda, derecha)
 LLAVES = {
     # join comun a ambas ramas
-    "member_contrato":          ("aco_ncode",      "aco_ncode"),
+    "member_contrato":          ("mem_aco_ncode",  "aco_ncode"),
     "residencial_ciudad":       ("ciu_res_codigo",  "ciu_res_codigo"),
     # rama TITULAR: persona e institucion vienen del contrato
     "titular_persona":          ("aco_per_ncode",  "per_ncode"),
@@ -197,7 +198,8 @@ df_ciudad_nombre = city.select(
 
 _l = llave
 
-_llave_join_str = _l("member_contrato")[0]   # "aco_ncode"
+_llave_mem, _llave_aco = _l("member_contrato")   # "mem_aco_ncode", "aco_ncode"
+_join_contrato = F.col(f"mem.{_llave_mem}") == F.col(f"aco.{_llave_aco}")
 
 # Construir el select como dict ordenado: primer alias gana, duplicados se omiten.
 # Esto es robusto frente a cualquier colision que dedup_data_cols no haya anticipado.
@@ -238,7 +240,7 @@ select_cols_beneficiario = _build_select(_tabla_cols, _extras + [F.lit("BENEFICI
 df_titular = (
     member
     .join(affiliation_contract,
-          on=_llave_join_str,
+          on=_join_contrato,
           how="inner")
     .join(person,
           F.col(f"aco.{_l('titular_persona')[0]}") == F.col(f"per.{_l('titular_persona')[1]}"),
@@ -267,7 +269,7 @@ df_titular = (
 df_beneficiario = (
     member
     .join(affiliation_contract,
-          on=_llave_join_str,
+          on=_join_contrato,
           how="inner")
     .join(person,
           F.col(f"mem.{_l('beneficiario_persona')[0]}") == F.col(f"per.{_l('beneficiario_persona')[1]}"),
