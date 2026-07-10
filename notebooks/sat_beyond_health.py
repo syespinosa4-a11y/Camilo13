@@ -2,6 +2,7 @@
 
 from pyspark.sql import functions as F
 from pyspark.sql import SparkSession
+from collections import defaultdict
 
 spark = SparkSession.builder.getOrCreate()
 
@@ -16,7 +17,6 @@ CONFIG = {
     "tabla_destino":    "sat_beyond_health",
 }
 
-# Tablas fuente
 TABLAS_BH = [
     "bh_sa_person",
     "bh_sa_address",
@@ -26,21 +26,34 @@ TABLAS_BH = [
     "bh_sa_member",
 ]
 
-# Columnas que existen en mas de una tabla: se renombran en la tabla donde son
-# clave foranea para que PySpark no genere ambiguedad al hacer el join wide.
+# Prefijo corto por tabla: se usa para renombrar columnas de datos duplicadas
+PREFIJOS_TABLA = {
+    "bh_sa_member":               "mem",
+    "bh_sa_affiliation_contract": "aco",
+    "bh_sa_person":               "per",
+    "bh_sa_institution":          "ins",
+    "bh_sa_address":              "add",
+    "bh_sa_city":                 "cit",
+}
+
+# Columnas que son llaves de join y tienen el mismo nombre en mas de una tabla.
+# Se renombran ANTES del join para que PySpark no genere ambiguedad.
 # Formato: { nombre_tabla: { col_original: col_nueva } }
 RENOMBRES = {
     "bh_sa_affiliation_contract": {
-        "per_ncode": "aco_per_ncode",
-        "ins_ncode": "aco_ins_ncode",
+        "per_ncode": "aco_per_ncode",   # titular viene del contrato
+        "ins_ncode": "aco_ins_ncode",   # institucion del contrato
     },
     "bh_sa_address": {
-        "per_ncode": "add_per_ncode",
-        "cit_ncode": "add_cit_ncode",
+        "per_ncode": "add_per_ncode",   # llave hacia persona en address
+        "cit_ncode": "add_cit_ncode",   # llave hacia city en address
+    },
+    "bh_sa_member": {
+        "per_ncode": "mem_per_ncode",   # beneficiario viene del member
     },
 }
 
-# Llaves de join entre tablas
+# Llaves de join entre tablas (izquierda, derecha)
 LLAVES = {
     # join comun a ambas ramas
     "member_contrato":          ("aco_ncode",      "aco_ncode"),
@@ -49,27 +62,25 @@ LLAVES = {
     "titular_persona":          ("aco_per_ncode",  "per_ncode"),
     "titular_institucion":      ("aco_ins_ncode",  "ins_ncode"),
     "titular_residencial":      ("aco_per_ncode",  "res_per_ncode"),
-    # rama BENEFICIARIO: persona viene del member
-    "beneficiario_persona":     ("per_ncode",      "per_ncode"),
+    # rama BENEFICIARIO: persona viene del member (mem_per_ncode tras renombre)
+    "beneficiario_persona":     ("mem_per_ncode",  "per_ncode"),
     "beneficiario_institucion": ("aco_ins_ncode",  "ins_ncode"),
-    "beneficiario_residencial": ("per_ncode",      "res_per_ncode"),
+    "beneficiario_residencial": ("mem_per_ncode",  "res_per_ncode"),
 }
 
-# Pre-agregado residencial: parametros de filtro y columnas de salida
+# Parametros del pre-agregado residencial
 RESIDENCIAL = {
-    "tabla":             "bh_sa_address",
-    "filtro_col":        "lty_ncode",        # columna que distingue tipo de direccion
-    "filtro_val":        1,                  # valor = residencial
-    "llave_persona":     "add_per_ncode",    # llave tras el renombre de ambiguedad
-    "col_direccion":     "add_caddress",     # columna de direccion en bh_sa_address
-    "join_ciudad_llave": ("add_cit_ncode",   # llave de address hacia city
-                          "cit_ncode"),
-    "col_ciudad_codigo": "cit_clegalcode",   # codigo legal de ciudad (bh_sa_city)
-    "col_ciudad_nombre": "cit_cname",        # nombre de ciudad (bh_sa_city)
+    "filtro_col":        "lty_ncode",
+    "filtro_val":        1,
+    "llave_persona":     "add_per_ncode",
+    "col_direccion":     "add_caddress",
+    "join_ciudad_llave": ("add_cit_ncode", "cit_ncode"),
+    "col_ciudad_codigo": "cit_clegalcode",
+    "col_ciudad_nombre": "cit_cname",
     "alias_dir":         "dir_res",
     "alias_ciu_codigo":  "ciu_res_codigo",
     "alias_ciu_nombre":  "ciudad_residencia",
-    "alias_llave":       "res_per_ncode",    # nombre de la llave en el df pre-agregado
+    "alias_llave":       "res_per_ncode",
 }
 
 # COMMAND ----------
@@ -82,23 +93,64 @@ def fuente(tabla: str):
 
 
 def aplicar_renombres(df, nombre_tabla: str):
-    """Renombra las columnas conflictivas segun RENOMBRES."""
+    """Renombra las llaves de join conflictivas segun RENOMBRES."""
     for col_orig, col_nueva in RENOMBRES.get(nombre_tabla, {}).items():
         df = df.withColumnRenamed(col_orig, col_nueva)
     return df
 
 
+def dedup_data_cols(tbls: dict) -> dict:
+    """
+    Detecta columnas de DATOS (no llaves) que aparecen en mas de una tabla
+    y las renombra con el prefijo de la tabla para evitar COLUMN_ALREADY_EXISTS
+    en el join wide. Las columnas ya tratadas por RENOMBRES o usadas en LLAVES
+    se excluyen automaticamente.
+    """
+    # columnas ya gestionadas: no tocar
+    gestionadas = set()
+    for renames in RENOMBRES.values():
+        gestionadas.update(v.lower() for v in renames.values())
+    for izq, der in LLAVES.values():
+        gestionadas.add(izq.lower())
+        gestionadas.add(der.lower())
+    gestionadas.add(RESIDENCIAL["alias_llave"].lower())
+
+    # mapear columna -> lista de (nombre_tabla, nombre_exacto_col)
+    col_a_tablas = defaultdict(list)
+    for nombre, df in tbls.items():
+        for col in df.columns:
+            if col.lower() not in gestionadas:
+                col_a_tablas[col.lower()].append((nombre, col))
+
+    # renombrar solo las que aparecen en mas de una tabla
+    duplicadas = {col: ocurr for col, ocurr in col_a_tablas.items() if len(ocurr) > 1}
+    result = dict(tbls)
+    for col_lower, ocurrencias in duplicadas.items():
+        for nombre_tabla, col_exact in ocurrencias:
+            prefijo = PREFIJOS_TABLA.get(nombre_tabla, nombre_tabla[:3])
+            nuevo = f"{prefijo}_{col_exact}"
+            result[nombre_tabla] = result[nombre_tabla].withColumnRenamed(col_exact, nuevo)
+
+    if duplicadas:
+        print("Columnas de datos renombradas automaticamente por duplicado:")
+        for col, ocurr in duplicadas.items():
+            tablas = [t for t, _ in ocurr]
+            print(f"  '{col}' encontrada en: {tablas}")
+
+    return result
+
+
 def llave(nombre: str):
-    """Devuelve la condicion de join a partir de LLAVES."""
-    izq, der = LLAVES[nombre]
-    return izq, der
+    return LLAVES[nombre]
 
 # COMMAND ----------
-# Lectura y desambiguacion de tablas fuente
+# Lectura, desambiguacion de llaves y dedup de columnas de datos
 
 tbls = {}
 for t in TABLAS_BH:
     tbls[t] = aplicar_renombres(fuente(t), t)
+
+tbls = dedup_data_cols(tbls)
 
 member               = tbls["bh_sa_member"]
 affiliation_contract = tbls["bh_sa_affiliation_contract"]
@@ -144,7 +196,7 @@ df_ciudad_nombre = city.select(
 # institucion. Finalmente, se une con los DataFrames df_residencial y df_ciudad_nombre para obtener
 # la direccion residencial y el nombre de la ciudad.
 
-_l = llave  # alias corto
+_l = llave
 
 df_titular = (
     member
@@ -154,9 +206,11 @@ df_titular = (
     .join(person,
           affiliation_contract[_l("titular_persona")[0]] == person[_l("titular_persona")[1]],
           how="left")
+    .drop(person[_l("titular_persona")[1]])      # elimina per_ncode duplicado de person
     .join(institution,
           affiliation_contract[_l("titular_institucion")[0]] == institution[_l("titular_institucion")[1]],
           how="left")
+    .drop(institution[_l("titular_institucion")[1]])  # elimina ins_ncode duplicado de institution
     .join(df_residencial,
           affiliation_contract[_l("titular_residencial")[0]] == df_residencial[_l("titular_residencial")[1]],
           how="left")
@@ -184,9 +238,11 @@ df_beneficiario = (
     .join(person,
           member[_l("beneficiario_persona")[0]] == person[_l("beneficiario_persona")[1]],
           how="left")
+    .drop(person[_l("beneficiario_persona")[1]])      # elimina per_ncode duplicado de person
     .join(institution,
           affiliation_contract[_l("beneficiario_institucion")[0]] == institution[_l("beneficiario_institucion")[1]],
           how="left")
+    .drop(institution[_l("beneficiario_institucion")[1]])  # elimina ins_ncode duplicado de institution
     .join(df_residencial,
           member[_l("beneficiario_residencial")[0]] == df_residencial[_l("beneficiario_residencial")[1]],
           how="left")
