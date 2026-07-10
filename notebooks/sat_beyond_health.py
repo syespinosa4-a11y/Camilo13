@@ -297,3 +297,25 @@ print("filas titular:     ", df_titular.count())
 print("filas beneficiario:", df_beneficiario.count())
 print("filas total:       ", df_resultado.count())
 df_resultado.show(5, truncate=False)
+
+# COMMAND ----------
+# Escritura en Unity Catalog (overwrite para reflejar el schema completo)
+
+_cat_dst = CONFIG["catalogo_destino"]
+_esq_dst = CONFIG["esquema_destino"]
+_tbl_dst = CONFIG["tabla_destino"]
+_tabla_full = f"`{_cat_dst}`.`{_esq_dst}`.`{_tbl_dst}`"
+
+spark.sql(f"DROP TABLE IF EXISTS {_tabla_full}")
+
+(
+    df_resultado
+    .write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(_tabla_full)
+)
+
+print(f"Tabla escrita: {_tabla_full}")
+print(f"Columnas: {len(df_resultado.columns)}")
