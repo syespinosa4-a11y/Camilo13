@@ -153,12 +153,14 @@ for t in TABLAS_BH:
 
 tbls = dedup_data_cols(tbls)
 
-member               = tbls["bh_sa_member"]
-affiliation_contract = tbls["bh_sa_affiliation_contract"]
-person               = tbls["bh_sa_person"]
-institution          = tbls["bh_sa_institution"]
-address              = tbls["bh_sa_address"]
-city                 = tbls["bh_sa_city"]
+# Alias por tabla: permite referenciar columnas con F.col("alias.col")
+# en joins encadenados sin que el optimizer de PySpark pierda columnas.
+member               = tbls["bh_sa_member"].alias("mem")
+affiliation_contract = tbls["bh_sa_affiliation_contract"].alias("aco")
+person               = tbls["bh_sa_person"].alias("per")
+institution          = tbls["bh_sa_institution"].alias("ins")
+address              = tbls["bh_sa_address"].alias("add")
+city                 = tbls["bh_sa_city"].alias("cit")
 
 # COMMAND ----------
 # Pre-agregado: residencial
@@ -171,11 +173,11 @@ _add_llave_izq, _add_llave_der = R["join_ciudad_llave"]
 df_residencial = (
     address.filter(F.col(R["filtro_col"]) == R["filtro_val"])
     .join(
-        city.select(_add_llave_der, R["col_ciudad_codigo"]),
-        address[_add_llave_izq] == city[_add_llave_der],
+        city.select(F.col(_add_llave_der), F.col(R["col_ciudad_codigo"])),
+        F.col(f"add.{_add_llave_izq}") == F.col(f"cit.{_add_llave_der}"),
         how="left",
     )
-    .groupBy(R["llave_persona"])
+    .groupBy(f"add.{R['llave_persona']}")
     .agg(
         F.max(R["col_direccion"]).alias(R["alias_dir"]),
         F.max(R["col_ciudad_codigo"]).alias(R["alias_ciu_codigo"]),
@@ -205,15 +207,15 @@ df_titular = (
           on=_l("member_contrato")[0],
           how="inner")
     .join(person,
-          affiliation_contract[_l("titular_persona")[0]] == person[_l("titular_persona")[1]],
+          F.col(f"aco.{_l('titular_persona')[0]}") == F.col(f"per.{_l('titular_persona')[1]}"),
           how="left")
     .join(institution,
-          affiliation_contract[_l("titular_institucion")[0]] == institution[_l("titular_institucion")[1]],
+          F.col(f"aco.{_l('titular_institucion')[0]}") == F.col(f"ins.{_l('titular_institucion')[1]}"),
           how="left")
-    .join(df_residencial,
-          affiliation_contract[_l("titular_residencial")[0]] == df_residencial[_l("titular_residencial")[1]],
+    .join(df_residencial.alias("res"),
+          F.col(f"aco.{_l('titular_residencial')[0]}") == F.col(f"res.{_l('titular_residencial')[1]}"),
           how="left")
-    .join(df_ciudad_nombre,
+    .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
     .withColumn("rol", F.lit("TITULAR"))
@@ -235,15 +237,15 @@ df_beneficiario = (
           on=_l("member_contrato")[0],
           how="inner")
     .join(person,
-          member[_l("beneficiario_persona")[0]] == person[_l("beneficiario_persona")[1]],
+          F.col(f"mem.{_l('beneficiario_persona')[0]}") == F.col(f"per.{_l('beneficiario_persona')[1]}"),
           how="left")
     .join(institution,
-          affiliation_contract[_l("beneficiario_institucion")[0]] == institution[_l("beneficiario_institucion")[1]],
+          F.col(f"aco.{_l('beneficiario_institucion')[0]}") == F.col(f"ins.{_l('beneficiario_institucion')[1]}"),
           how="left")
-    .join(df_residencial,
-          member[_l("beneficiario_residencial")[0]] == df_residencial[_l("beneficiario_residencial")[1]],
+    .join(df_residencial.alias("res"),
+          F.col(f"mem.{_l('beneficiario_residencial')[0]}") == F.col(f"res.{_l('beneficiario_residencial')[1]}"),
           how="left")
-    .join(df_ciudad_nombre,
+    .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
     .withColumn("rol", F.lit("BENEFICIARIO"))
