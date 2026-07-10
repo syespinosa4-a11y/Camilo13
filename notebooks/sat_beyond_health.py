@@ -199,9 +199,11 @@ _l = llave
 
 _llave_join_str = _l("member_contrato")[0]   # "aco_ncode"
 
-mem_sel = [F.col(f"mem.{c}").alias(c) for c in tbls["bh_sa_member"].columns]
+mem_sel = [F.col(f"mem.{c}").alias(c) for c in tbls["bh_sa_member"].columns
+           if c != _llave_join_str]           # aco_ncode se agrega una sola vez
 aco_sel = [F.col(f"aco.{c}").alias(c) for c in tbls["bh_sa_affiliation_contract"].columns
-           if c != _llave_join_str]           # aco_ncode ya esta en mem
+           if c != _llave_join_str]           # aco_ncode excluido de aco tambien
+join_key_sel = [F.col(_llave_join_str)]       # aco_ncode: una unica vez
 per_sel = [F.col(f"per.{c}").alias(c) for c in tbls["bh_sa_person"].columns]
 ins_sel = [F.col(f"ins.{c}").alias(c) for c in tbls["bh_sa_institution"].columns]
 res_sel = [F.col(R["alias_dir"]), F.col(R["alias_ciu_codigo"])]
@@ -233,7 +235,7 @@ df_titular = (
     .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
-    .select(*mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
+    .select(*join_key_sel, *mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
             F.lit("TITULAR").alias("rol"))
 )
 
@@ -263,7 +265,7 @@ df_beneficiario = (
     .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
-    .select(*mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
+    .select(*join_key_sel, *mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
             F.lit("BENEFICIARIO").alias("rol"))
 )
 
