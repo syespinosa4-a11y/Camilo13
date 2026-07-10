@@ -304,9 +304,10 @@ df_resultado.show(5, truncate=False)
 _cat_dst = CONFIG["catalogo_destino"]
 _esq_dst = CONFIG["esquema_destino"]
 _tbl_dst = CONFIG["tabla_destino"]
-_tabla_full = f"`{_cat_dst}`.`{_esq_dst}`.`{_tbl_dst}`"
+_tabla_sql  = f"`{_cat_dst}`.`{_esq_dst}`.`{_tbl_dst}`"   # para spark.sql
+_tabla_save = f"{_cat_dst}.{_esq_dst}.{_tbl_dst}"          # para saveAsTable
 
-spark.sql(f"DROP TABLE IF EXISTS {_tabla_full}")
+spark.sql(f"DROP TABLE IF EXISTS {_tabla_sql}")
 
 (
     df_resultado
@@ -314,8 +315,8 @@ spark.sql(f"DROP TABLE IF EXISTS {_tabla_full}")
     .format("delta")
     .mode("overwrite")
     .option("overwriteSchema", "true")
-    .saveAsTable(_tabla_full)
+    .saveAsTable(_tabla_save)
 )
 
-print(f"Tabla escrita: {_tabla_full}")
+print(f"Tabla escrita: {_tabla_save}")
 print(f"Columnas: {len(df_resultado.columns)}")
