@@ -191,6 +191,23 @@ df_ciudad_nombre = city.select(
 )
 
 # COMMAND ----------
+# Lista de columnas a seleccionar de cada tabla para el join wide.
+# Se excluye aco_ncode de affiliation_contract (ya viene de member via on= string join).
+# Las llaves de condicion (per_ncode, ins_ncode) se toman de la tabla duena (person, institution).
+
+_l = llave
+
+_llave_join_str = _l("member_contrato")[0]   # "aco_ncode"
+
+mem_sel = [F.col(f"mem.{c}").alias(c) for c in tbls["bh_sa_member"].columns]
+aco_sel = [F.col(f"aco.{c}").alias(c) for c in tbls["bh_sa_affiliation_contract"].columns
+           if c != _llave_join_str]           # aco_ncode ya esta en mem
+per_sel = [F.col(f"per.{c}").alias(c) for c in tbls["bh_sa_person"].columns]
+ins_sel = [F.col(f"ins.{c}").alias(c) for c in tbls["bh_sa_institution"].columns]
+res_sel = [F.col(R["alias_dir"]), F.col(R["alias_ciu_codigo"])]
+cit_sel = [F.col(R["alias_ciu_nombre"])]
+
+# COMMAND ----------
 # RAMA TITULAR
 # En este fragmento, se crea un DataFrame df_titular que contiene la informacion de los titulares.
 # Se une la tabla member con la tabla affiliation_contract para obtener el codigo de la afiliacion
@@ -199,12 +216,10 @@ df_ciudad_nombre = city.select(
 # institucion. Finalmente, se une con los DataFrames df_residencial y df_ciudad_nombre para obtener
 # la direccion residencial y el nombre de la ciudad.
 
-_l = llave
-
 df_titular = (
     member
     .join(affiliation_contract,
-          on=_l("member_contrato")[0],
+          on=_llave_join_str,
           how="inner")
     .join(person,
           F.col(f"aco.{_l('titular_persona')[0]}") == F.col(f"per.{_l('titular_persona')[1]}"),
@@ -218,8 +233,8 @@ df_titular = (
     .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
-    .withColumn("rol", F.lit("TITULAR"))
-    .drop(R["alias_llave"])
+    .select(*mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
+            F.lit("TITULAR").alias("rol"))
 )
 
 # COMMAND ----------
@@ -234,7 +249,7 @@ df_titular = (
 df_beneficiario = (
     member
     .join(affiliation_contract,
-          on=_l("member_contrato")[0],
+          on=_llave_join_str,
           how="inner")
     .join(person,
           F.col(f"mem.{_l('beneficiario_persona')[0]}") == F.col(f"per.{_l('beneficiario_persona')[1]}"),
@@ -248,8 +263,8 @@ df_beneficiario = (
     .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
-    .withColumn("rol", F.lit("BENEFICIARIO"))
-    .drop(R["alias_llave"])
+    .select(*mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
+            F.lit("BENEFICIARIO").alias("rol"))
 )
 
 # COMMAND ----------
