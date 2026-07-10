@@ -152,7 +152,7 @@ df_titular = (
           on=_l("member_contrato")[0],
           how="inner")
     .join(person,
-          member[_l("titular_persona")[0]] == person[_l("titular_persona")[1]],
+          affiliation_contract[_l("titular_persona")[0]] == person[_l("titular_persona")[1]],
           how="left")
     .join(institution,
           affiliation_contract[_l("titular_institucion")[0]] == institution[_l("titular_institucion")[1]],
