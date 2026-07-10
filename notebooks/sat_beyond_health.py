@@ -199,15 +199,32 @@ _l = llave
 
 _llave_join_str = _l("member_contrato")[0]   # "aco_ncode"
 
-mem_sel = [F.col(f"mem.{c}").alias(c) for c in tbls["bh_sa_member"].columns
-           if c != _llave_join_str]           # aco_ncode se agrega una sola vez
-aco_sel = [F.col(f"aco.{c}").alias(c) for c in tbls["bh_sa_affiliation_contract"].columns
-           if c != _llave_join_str]           # aco_ncode excluido de aco tambien
-join_key_sel = [F.col(f"mem.{_llave_join_str}").alias(_llave_join_str)]  # aco_ncode: via mem para evitar ambiguedad
-per_sel = [F.col(f"per.{c}").alias(c) for c in tbls["bh_sa_person"].columns]
-ins_sel = [F.col(f"ins.{c}").alias(c) for c in tbls["bh_sa_institution"].columns]
-res_sel = [F.col(R["alias_dir"]), F.col(R["alias_ciu_codigo"])]
-cit_sel = [F.col(R["alias_ciu_nombre"])]
+# Construir el select como dict ordenado: primer alias gana, duplicados se omiten.
+# Esto es robusto frente a cualquier colision que dedup_data_cols no haya anticipado.
+def _build_select(tabla_alias_pares, extras):
+    seen = {}
+    for alias_tabla, cols in tabla_alias_pares:
+        for c in cols:
+            if c not in seen:
+                seen[c] = F.col(f"{alias_tabla}.{c}").alias(c)
+    result = list(seen.values())
+    result.extend(extras)
+    return result
+
+_tabla_cols = [
+    ("mem", tbls["bh_sa_member"].columns),
+    ("aco", tbls["bh_sa_affiliation_contract"].columns),
+    ("per", tbls["bh_sa_person"].columns),
+    ("ins", tbls["bh_sa_institution"].columns),
+]
+_extras = [
+    F.col(R["alias_dir"]),
+    F.col(R["alias_ciu_codigo"]),
+    F.col(R["alias_ciu_nombre"]),
+]
+
+select_cols_titular     = _build_select(_tabla_cols, _extras + [F.lit("TITULAR").alias("rol")])
+select_cols_beneficiario = _build_select(_tabla_cols, _extras + [F.lit("BENEFICIARIO").alias("rol")])
 
 # COMMAND ----------
 # RAMA TITULAR
@@ -235,8 +252,7 @@ df_titular = (
     .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
-    .select(*join_key_sel, *mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
-            F.lit("TITULAR").alias("rol"))
+    .select(*select_cols_titular)
 )
 
 # COMMAND ----------
@@ -265,8 +281,7 @@ df_beneficiario = (
     .join(df_ciudad_nombre.alias("ciudad"),
           on=_l("residencial_ciudad")[0],
           how="left")
-    .select(*join_key_sel, *mem_sel, *aco_sel, *per_sel, *ins_sel, *res_sel, *cit_sel,
-            F.lit("BENEFICIARIO").alias("rol"))
+    .select(*select_cols_beneficiario)
 )
 
 # COMMAND ----------
