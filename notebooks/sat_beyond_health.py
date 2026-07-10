@@ -50,6 +50,7 @@ RENOMBRES = {
     },
     "bh_sa_member": {
         "per_ncode": "mem_per_ncode",   # beneficiario viene del member
+        "ins_ncode": "mem_ins_ncode",   # ins_ncode de member choca con institution.ins_ncode
     },
 }
 
