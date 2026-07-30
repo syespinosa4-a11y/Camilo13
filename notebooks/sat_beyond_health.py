@@ -209,11 +209,21 @@
 # MAGIC )
 # MAGIC
 # MAGIC -- ============================================================
-# MAGIC -- PASO 5: Resultado final — titulares + beneficiarios
+# MAGIC -- PASO 5: Resultado final — deduplicado por persona+contrato+rol
 # MAGIC -- ============================================================
-# MAGIC SELECT * FROM titular
-# MAGIC UNION ALL
-# MAGIC SELECT * FROM beneficiario
+# MAGIC SELECT * FROM (
+# MAGIC     SELECT *,
+# MAGIC            ROW_NUMBER() OVER (
+# MAGIC                PARTITION BY tipo_documento, numero_documento, contrato, rol
+# MAGIC                ORDER BY per_fecha_cargue DESC
+# MAGIC            ) AS _rn
+# MAGIC     FROM (
+# MAGIC         SELECT * FROM titular
+# MAGIC         UNION ALL
+# MAGIC         SELECT * FROM beneficiario
+# MAGIC     ) all_roles
+# MAGIC ) t
+# MAGIC WHERE _rn = 1
 
 # COMMAND ----------
 # MAGIC %md
