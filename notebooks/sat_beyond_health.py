@@ -101,6 +101,7 @@
 # MAGIC         ciudad.departamento,
 # MAGIC         ciudad.pais,
 # MAGIC         aco.pla_ncode                           AS plan,
+# MAGIC         aco.ACO_CONTRACTCODE                    AS contrato,
 # MAGIC         CASE
 # MAGIC             WHEN per.per_ncode IS NOT NULL THEN 'Natural'
 # MAGIC             ELSE 'Juridica'
@@ -158,6 +159,7 @@
 # MAGIC         ciudad.departamento,
 # MAGIC         ciudad.pais,
 # MAGIC         aco.pla_ncode                           AS plan,
+# MAGIC         aco.ACO_CONTRACTCODE                    AS contrato,
 # MAGIC         CASE
 # MAGIC             WHEN per.per_ncode IS NOT NULL THEN 'Natural'
 # MAGIC             ELSE 'Juridica'
