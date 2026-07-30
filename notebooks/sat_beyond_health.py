@@ -101,6 +101,10 @@
 # MAGIC         ciudad.departamento,
 # MAGIC         ciudad.pais,
 # MAGIC         aco.pla_ncode                           AS plan,
+# MAGIC         CASE
+# MAGIC             WHEN per.per_ncode IS NOT NULL THEN 'Natural'
+# MAGIC             ELSE 'Juridica'
+# MAGIC         END                                     AS tipo_persona,
 # MAGIC         'TITULAR'                               AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
@@ -154,6 +158,10 @@
 # MAGIC         ciudad.departamento,
 # MAGIC         ciudad.pais,
 # MAGIC         aco.pla_ncode                           AS plan,
+# MAGIC         CASE
+# MAGIC             WHEN per.per_ncode IS NOT NULL THEN 'Natural'
+# MAGIC             ELSE 'Juridica'
+# MAGIC         END                                     AS tipo_persona,
 # MAGIC         'BENEFICIARIO'                          AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
