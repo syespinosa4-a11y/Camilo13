@@ -113,6 +113,8 @@
 # MAGIC             THEN 'Activo'
 # MAGIC             ELSE 'No Activo'
 # MAGIC         END                                     AS estado,
+# MAGIC         mem.MEM_DSTARTINGDATE                   AS fecha_inicio_vigencia,
+# MAGIC         mem.MEM_DENDINGDATE                     AS fecha_fin_vigencia,
 # MAGIC         'TITULAR'                               AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
@@ -178,6 +180,8 @@
 # MAGIC             THEN 'Activo'
 # MAGIC             ELSE 'No Activo'
 # MAGIC         END                                     AS estado,
+# MAGIC         mem.MEM_DSTARTINGDATE                   AS fecha_inicio_vigencia,
+# MAGIC         mem.MEM_DENDINGDATE                     AS fecha_fin_vigencia,
 # MAGIC         'BENEFICIARIO'                          AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
@@ -210,7 +214,7 @@
 # MAGIC -- Total de filas por rol
 # MAGIC SELECT
 # MAGIC     rol,
-# MAGIC     COUNT(*)                        AS total_filas,
+# MAGIC     COUNT(*)                         AS total_filas,
 # MAGIC     COUNT(DISTINCT numero_documento) AS personas_unicas
 # MAGIC FROM axa_col_slv_dv.stg_cliente.sat_beyond_health
 # MAGIC GROUP BY rol
@@ -231,6 +235,11 @@
 # MAGIC     pais,
 # MAGIC     eps,
 # MAGIC     plan,
+# MAGIC     contrato,
+# MAGIC     tipo_persona,
+# MAGIC     estado,
+# MAGIC     fecha_inicio_vigencia,
+# MAGIC     fecha_fin_vigencia,
 # MAGIC     per_fecha_cargue
 # MAGIC FROM axa_col_slv_dv.stg_cliente.sat_beyond_health
 # MAGIC LIMIT 5
