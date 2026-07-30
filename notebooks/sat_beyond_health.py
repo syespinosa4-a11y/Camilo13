@@ -115,7 +115,7 @@
 # MAGIC         END                                     AS estado,
 # MAGIC         mem.MEM_DSTARTINGDATE                   AS fecha_inicio_vigencia,
 # MAGIC         mem.MEM_DENDINGDATE                     AS fecha_fin_vigencia,
-# MAGIC         CASE aco.CTI_NCODE
+# MAGIC         CASE aco.CDI_NCODE
 # MAGIC             WHEN 1 THEN 'FAMILIAR'
 # MAGIC             WHEN 3 THEN 'COLECTIVO'
 # MAGIC         END                                     AS tipo_contrato,
@@ -187,7 +187,7 @@
 # MAGIC         END                                     AS estado,
 # MAGIC         mem.MEM_DSTARTINGDATE                   AS fecha_inicio_vigencia,
 # MAGIC         mem.MEM_DENDINGDATE                     AS fecha_fin_vigencia,
-# MAGIC         CASE aco.CTI_NCODE
+# MAGIC         CASE aco.CDI_NCODE
 # MAGIC             WHEN 1 THEN 'FAMILIAR'
 # MAGIC             WHEN 3 THEN 'COLECTIVO'
 # MAGIC         END                                     AS tipo_contrato,
