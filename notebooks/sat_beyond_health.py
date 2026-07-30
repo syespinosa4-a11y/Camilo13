@@ -1,322 +1,212 @@
 # Databricks notebook source
-
-from pyspark.sql import functions as F
-from pyspark.sql import SparkSession
-from collections import defaultdict
-
-spark = SparkSession.builder.getOrCreate()
-
-# COMMAND ----------
-# CONFIG: unico lugar a editar cuando cambien catalogos, esquemas o llaves
-
-CONFIG = {
-    "catalogo_fuente":  "axa_col_slv_dv",   # <-- verificar con: spark.sql("SHOW CATALOGS").show()
-    "esquema_fuente":   "core_bh",
-    "catalogo_destino": "uc_axa_cli",
-    "esquema_destino":  "silver",
-    "tabla_destino":    "sat_beyond_health",
-}
-
-TABLAS_BH = [
-    "bh_sa_person",
-    "bh_sa_address",
-    "bh_sa_institution",
-    "bh_sa_city",
-    "bh_sa_affiliation_contract",
-    "bh_sa_member",
-]
-
-# Prefijo corto por tabla: se usa para renombrar columnas de datos duplicadas
-PREFIJOS_TABLA = {
-    "bh_sa_member":               "mem",
-    "bh_sa_affiliation_contract": "aco",
-    "bh_sa_person":               "per",
-    "bh_sa_institution":          "ins",
-    "bh_sa_address":              "add",
-    "bh_sa_city":                 "cit",
-}
-
-# Columnas que son llaves de join y tienen el mismo nombre en mas de una tabla.
-# Se renombran ANTES del join para que PySpark no genere ambiguedad.
-# Formato: { nombre_tabla: { col_original: col_nueva } }
-RENOMBRES = {
-    "bh_sa_affiliation_contract": {
-        "per_ncode": "aco_per_ncode",   # titular viene del contrato
-        "ins_ncode": "aco_ins_ncode",   # institucion del contrato
-    },
-    "bh_sa_address": {
-        "per_ncode": "add_per_ncode",   # llave hacia persona en address
-        "cit_ncode": "add_cit_ncode",   # llave hacia city en address
-    },
-    "bh_sa_member": {
-        "aco_ncode": "mem_aco_ncode",   # FK al contrato: evita colision con aco.aco_ncode en el join
-        "per_ncode": "mem_per_ncode",   # beneficiario viene del member
-        "ins_ncode": "mem_ins_ncode",   # ins_ncode de member choca con institution.ins_ncode
-    },
-}
-
-# Llaves de join entre tablas (izquierda, derecha)
-LLAVES = {
-    # join comun a ambas ramas
-    "member_contrato":          ("mem_aco_ncode",  "aco_ncode"),
-    "residencial_ciudad":       ("ciu_res_codigo",  "ciu_res_codigo"),
-    # rama TITULAR: persona e institucion vienen del contrato
-    "titular_persona":          ("aco_per_ncode",  "per_ncode"),
-    "titular_institucion":      ("aco_ins_ncode",  "ins_ncode"),
-    "titular_residencial":      ("aco_per_ncode",  "res_per_ncode"),
-    # rama BENEFICIARIO: persona viene del member (mem_per_ncode tras renombre)
-    "beneficiario_persona":     ("mem_per_ncode",  "per_ncode"),
-    "beneficiario_institucion": ("aco_ins_ncode",  "ins_ncode"),
-    "beneficiario_residencial": ("mem_per_ncode",  "res_per_ncode"),
-}
-
-# Parametros del pre-agregado residencial
-RESIDENCIAL = {
-    "filtro_col":        "lty_ncode",
-    "filtro_val":        1,
-    "llave_persona":     "add_per_ncode",
-    "col_direccion":     "add_caddress",
-    "join_ciudad_llave": ("add_cit_ncode", "cit_ncode"),
-    "col_ciudad_codigo": "cit_clegalcode",
-    "col_ciudad_nombre": "cit_cname",
-    "alias_dir":         "dir_res",
-    "alias_ciu_codigo":  "ciu_res_codigo",
-    "alias_ciu_nombre":  "ciudad_residencia",
-    "alias_llave":       "res_per_ncode",
-}
+# MAGIC %md
+# MAGIC # sat_beyond_health — Satélite Beyond Health
+# MAGIC
+# MAGIC Construye el satélite Beyond Health consolidando titulares y beneficiarios
+# MAGIC desde las tablas fuente del sistema BH (core_bh).
+# MAGIC
+# MAGIC ## Roles
+# MAGIC - **TITULAR**: `mem.per_ncode = aco.per_ncode`
+# MAGIC - **BENEFICIARIO**: `mem.per_ncode <> aco.per_ncode`
+# MAGIC
+# MAGIC ## Tablas fuente
+# MAGIC | Tabla | Contenido |
+# MAGIC |---|---|
+# MAGIC | `bh_sa_member` | Miembros del contrato |
+# MAGIC | `bh_sa_affiliation_contract` | Contratos de afiliación |
+# MAGIC | `bh_sa_person` | Datos personales |
+# MAGIC | `bh_sa_institution` | Institución (EPS) |
+# MAGIC | `bh_sa_address` | Direcciones (lty_ncode=1 → residencial) |
+# MAGIC | `bh_sa_city` | Catálogo ciudades → departamento/país |
+# MAGIC
+# MAGIC ## Tabla destino
+# MAGIC `axa_col_slv_dv.stg_cliente.sat_beyond_health`
 
 # COMMAND ----------
-# Helpers
-
-def fuente(tabla: str):
-    cat = CONFIG["catalogo_fuente"]
-    esq = CONFIG["esquema_fuente"]
-    return spark.table(f"`{cat}`.`{esq}`.`{tabla}`")
-
-
-def aplicar_renombres(df, nombre_tabla: str):
-    """Renombra las llaves de join conflictivas segun RENOMBRES."""
-    for col_orig, col_nueva in RENOMBRES.get(nombre_tabla, {}).items():
-        df = df.withColumnRenamed(col_orig, col_nueva)
-    return df
-
-
-def dedup_data_cols(tbls: dict) -> dict:
-    """
-    Detecta columnas de DATOS (no llaves) que aparecen en mas de una tabla
-    y las renombra con el prefijo de la tabla para evitar COLUMN_ALREADY_EXISTS
-    en el join wide. Las columnas ya tratadas por RENOMBRES o usadas en LLAVES
-    se excluyen automaticamente.
-    """
-    # columnas ya gestionadas: no tocar
-    gestionadas = set()
-    for renames in RENOMBRES.values():
-        gestionadas.update(v.lower() for v in renames.values())
-    for izq, der in LLAVES.values():
-        gestionadas.add(izq.lower())
-        gestionadas.add(der.lower())
-    gestionadas.add(RESIDENCIAL["alias_llave"].lower())
-
-    # mapear columna -> lista de (nombre_tabla, nombre_exacto_col)
-    col_a_tablas = defaultdict(list)
-    for nombre, df in tbls.items():
-        for col in df.columns:
-            if col.lower() not in gestionadas:
-                col_a_tablas[col.lower()].append((nombre, col))
-
-    # renombrar solo las que aparecen en mas de una tabla
-    duplicadas = {col: ocurr for col, ocurr in col_a_tablas.items() if len(ocurr) > 1}
-    result = dict(tbls)
-    for col_lower, ocurrencias in duplicadas.items():
-        for nombre_tabla, col_exact in ocurrencias:
-            prefijo = PREFIJOS_TABLA.get(nombre_tabla, nombre_tabla[:3])
-            nuevo = f"{prefijo}_{col_exact}"
-            result[nombre_tabla] = result[nombre_tabla].withColumnRenamed(col_exact, nuevo)
-
-    if duplicadas:
-        print("Columnas de datos renombradas automaticamente por duplicado:")
-        for col, ocurr in duplicadas.items():
-            tablas = [t for t, _ in ocurr]
-            print(f"  '{col}' encontrada en: {tablas}")
-
-    return result
-
-
-def llave(nombre: str):
-    return LLAVES[nombre]
+# MAGIC %md
+# MAGIC ## Ejecución — Crear el satélite Beyond Health
 
 # COMMAND ----------
-# Lectura, desambiguacion de llaves y dedup de columnas de datos
-
-tbls = {}
-for t in TABLAS_BH:
-    tbls[t] = aplicar_renombres(fuente(t), t)
-
-tbls = dedup_data_cols(tbls)
-
-# Alias por tabla: permite referenciar columnas con F.col("alias.col")
-# en joins encadenados sin que el optimizer de PySpark pierda columnas.
-member               = tbls["bh_sa_member"].alias("mem")
-affiliation_contract = tbls["bh_sa_affiliation_contract"].alias("aco")
-person               = tbls["bh_sa_person"].alias("per")
-institution          = tbls["bh_sa_institution"].alias("ins")
-address              = tbls["bh_sa_address"].alias("add")
-city                 = tbls["bh_sa_city"].alias("cit")
-
-# COMMAND ----------
-# Pre-agregado: residencial
-# bh_sa_address (lty_ncode = 1) + bh_sa_city agrupado por per_ncode.
-# Produce una fila por persona con su direccion y codigo de ciudad.
-
-R = RESIDENCIAL
-_add_llave_izq, _add_llave_der = R["join_ciudad_llave"]
-
-df_residencial = (
-    address.filter(F.col(R["filtro_col"]) == R["filtro_val"])
-    .join(
-        city.select(F.col(_add_llave_der), F.col(R["col_ciudad_codigo"])),
-        F.col(f"add.{_add_llave_izq}") == F.col(f"cit.{_add_llave_der}"),
-        how="left",
-    )
-    .groupBy(f"add.{R['llave_persona']}")
-    .agg(
-        F.max(R["col_direccion"]).alias(R["alias_dir"]),
-        F.max(R["col_ciudad_codigo"]).alias(R["alias_ciu_codigo"]),
-    )
-    .withColumnRenamed(R["llave_persona"], R["alias_llave"])
-)
-
-df_ciudad_nombre = city.select(
-    F.col(R["col_ciudad_codigo"]).alias(R["alias_ciu_codigo"]),
-    F.col(R["col_ciudad_nombre"]).alias(R["alias_ciu_nombre"]),
-)
-
-# COMMAND ----------
-# Lista de columnas a seleccionar de cada tabla para el join wide.
-# Se excluye aco_ncode de affiliation_contract (ya viene de member via on= string join).
-# Las llaves de condicion (per_ncode, ins_ncode) se toman de la tabla duena (person, institution).
-
-_l = llave
-
-_llave_mem, _llave_aco = _l("member_contrato")   # "mem_aco_ncode", "aco_ncode"
-_join_contrato = F.col(f"mem.{_llave_mem}") == F.col(f"aco.{_llave_aco}")
-
-# Construir el select como dict ordenado: primer alias gana, duplicados se omiten.
-# Esto es robusto frente a cualquier colision que dedup_data_cols no haya anticipado.
-def _build_select(tabla_alias_pares, extras):
-    seen = {}
-    for alias_tabla, cols in tabla_alias_pares:
-        for c in cols:
-            if c not in seen:
-                seen[c] = F.col(f"{alias_tabla}.{c}").alias(c)
-    result = list(seen.values())
-    result.extend(extras)
-    return result
-
-_tabla_cols = [
-    ("mem", tbls["bh_sa_member"].columns),
-    ("aco", tbls["bh_sa_affiliation_contract"].columns),
-    ("per", tbls["bh_sa_person"].columns),
-    ("ins", tbls["bh_sa_institution"].columns),
-]
-_extras = [
-    F.col(R["alias_dir"]),
-    F.col(R["alias_ciu_codigo"]),
-    F.col(R["alias_ciu_nombre"]),
-]
-
-select_cols_titular     = _build_select(_tabla_cols, _extras + [F.lit("TITULAR").alias("rol")])
-select_cols_beneficiario = _build_select(_tabla_cols, _extras + [F.lit("BENEFICIARIO").alias("rol")])
-
-# COMMAND ----------
-# RAMA TITULAR
-# En este fragmento, se crea un DataFrame df_titular que contiene la informacion de los titulares.
-# Se une la tabla member con la tabla affiliation_contract para obtener el codigo de la afiliacion
-# y el codigo de la persona titular. Luego, se une con la tabla person para obtener la informacion
-# de la persona titular. Tambien se une con la tabla institution para obtener la informacion de la
-# institucion. Finalmente, se une con los DataFrames df_residencial y df_ciudad_nombre para obtener
-# la direccion residencial y el nombre de la ciudad.
-
-df_titular = (
-    member
-    .join(affiliation_contract,
-          on=_join_contrato,
-          how="inner")
-    .join(person,
-          F.col(f"aco.{_l('titular_persona')[0]}") == F.col(f"per.{_l('titular_persona')[1]}"),
-          how="left")
-    .join(institution,
-          F.col(f"aco.{_l('titular_institucion')[0]}") == F.col(f"ins.{_l('titular_institucion')[1]}"),
-          how="left")
-    .join(df_residencial.alias("res"),
-          F.col(f"aco.{_l('titular_residencial')[0]}") == F.col(f"res.{_l('titular_residencial')[1]}"),
-          how="left")
-    .join(df_ciudad_nombre.alias("ciudad"),
-          on=_l("residencial_ciudad")[0],
-          how="left")
-    .select(*select_cols_titular)
-)
-
-# COMMAND ----------
-# RAMA BENEFICIARIO
-# En este fragmento, se crea un DataFrame df_beneficiario que contiene la informacion de los beneficiarios.
-# Se une la tabla member con la tabla affiliation_contract para obtener el codigo de la afiliacion
-# y el codigo de la institucion. Luego, se une con la tabla person para obtener la informacion de la
-# persona beneficiaria. Tambien se une con la tabla institution para obtener la informacion de la
-# institucion. Finalmente, se une con los DataFrames df_residencial y df_ciudad_nombre para obtener
-# la direccion residencial y el nombre de la ciudad.
-
-df_beneficiario = (
-    member
-    .join(affiliation_contract,
-          on=_join_contrato,
-          how="inner")
-    .join(person,
-          F.col(f"mem.{_l('beneficiario_persona')[0]}") == F.col(f"per.{_l('beneficiario_persona')[1]}"),
-          how="left")
-    .join(institution,
-          F.col(f"aco.{_l('beneficiario_institucion')[0]}") == F.col(f"ins.{_l('beneficiario_institucion')[1]}"),
-          how="left")
-    .join(df_residencial.alias("res"),
-          F.col(f"mem.{_l('beneficiario_residencial')[0]}") == F.col(f"res.{_l('beneficiario_residencial')[1]}"),
-          how="left")
-    .join(df_ciudad_nombre.alias("ciudad"),
-          on=_l("residencial_ciudad")[0],
-          how="left")
-    .select(*select_cols_beneficiario)
-)
-
-# COMMAND ----------
-# Union horizontal titular + beneficiario
-
-df_resultado = df_titular.unionByName(df_beneficiario)
-
-print("columnas del satelite:", len(df_resultado.columns))
-print(df_resultado.columns)
-print("filas titular:     ", df_titular.count())
-print("filas beneficiario:", df_beneficiario.count())
-print("filas total:       ", df_resultado.count())
-df_resultado.show(5, truncate=False)
+# MAGIC %sql
+# MAGIC
+# MAGIC CREATE OR REPLACE TABLE axa_col_slv_dv.stg_cliente.sat_beyond_health
+# MAGIC USING DELTA AS
+# MAGIC
+# MAGIC -- ============================================================
+# MAGIC -- PASO 1: Dirección residencial por persona
+# MAGIC -- ============================================================
+# MAGIC WITH residencial AS (
+# MAGIC     SELECT
+# MAGIC         a.per_ncode             AS res_per_ncode,
+# MAGIC         MAX(a.add_caddress)     AS dir_res,
+# MAGIC         MAX(c.cit_clegalcode)   AS ciu_res_codigo
+# MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_address a
+# MAGIC     LEFT JOIN axa_col_slv_dv.core_bh.bh_sa_city c
+# MAGIC         ON a.cit_ncode = c.cit_ncode
+# MAGIC     WHERE a.lty_ncode = 1
+# MAGIC     GROUP BY a.per_ncode
+# MAGIC ),
+# MAGIC
+# MAGIC -- ============================================================
+# MAGIC -- PASO 2: Ciudad y país
+# MAGIC -- dep_ncode presente → ciudad colombiana → Colombia
+# MAGIC -- dep_ncode ausente  → ciudad extranjera → Exterior
+# MAGIC -- ============================================================
+# MAGIC ciudad AS (
+# MAGIC     SELECT
+# MAGIC         c.cit_clegalcode        AS ciu_res_codigo,
+# MAGIC         c.cit_cname             AS ciudad_residencia,
+# MAGIC         c.dep_ncode             AS departamento,
+# MAGIC         CASE
+# MAGIC             WHEN c.dep_ncode IS NOT NULL THEN 'Colombia'
+# MAGIC             ELSE 'Exterior'
+# MAGIC         END                     AS pais
+# MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_city c
+# MAGIC ),
+# MAGIC
+# MAGIC -- ============================================================
+# MAGIC -- PASO 3: Titulares (mem.per_ncode = aco.per_ncode)
+# MAGIC -- ============================================================
+# MAGIC titular AS (
+# MAGIC     SELECT
+# MAGIC         mem.mem_ncode                           AS mem_ncode,
+# MAGIC         mem.per_ncode                           AS mem_per_ncode,
+# MAGIC         mem.aco_ncode                           AS mem_aco_ncode,
+# MAGIC         aco.aco_ncode                           AS aco_ncode,
+# MAGIC         aco.per_ncode                           AS aco_per_ncode,
+# MAGIC         aco.ins_ncode                           AS aco_ins_ncode,
+# MAGIC         per.per_ncode                           AS per_ncode,
+# MAGIC         ins.ins_ncode                           AS ins_ncode,
+# MAGIC         per.TID_NCODE                           AS tipo_documento,
+# MAGIC         per.PER_CIDENTIFICATIONNUMBER           AS numero_documento,
+# MAGIC         per.PER_CFIRSTNAME                      AS primer_nombre,
+# MAGIC         per.PER_CLASTNAME                       AS primer_apellido,
+# MAGIC         per.PER_CMIDDLENAME                     AS segundo_nombre,
+# MAGIC         per.PER_CMOTHERNAME                     AS segundo_apellido,
+# MAGIC         COALESCE(per.PER_CEMAIL, per.PER_CMAIL) AS email,
+# MAGIC         per.PER_CMOBILEPHONE                    AS celular,
+# MAGIC         per.PER_DBIRTHDATE                      AS fecha_nacimiento,
+# MAGIC         per.PER_CGENDER                         AS genero,
+# MAGIC         per.PER_BAUTHPERSONALINFO               AS ATDP,
+# MAGIC         per.EAC_NCODE                           AS actividad_economica,
+# MAGIC         per.MST_NCODE                           AS estado_civil,
+# MAGIC         per.FECHA_CARGUE                        AS per_fecha_cargue,
+# MAGIC         ins.INS_CNAME                           AS nombre_completo_razon_social,
+# MAGIC         ins.INS_CLEGALCODE                      AS eps,
+# MAGIC         ins.INS_BEMAIL_SEND                     AS preferencia_contacto_email,
+# MAGIC         ins.INS_BSMS_SEND                       AS preferencia_contacto_sms,
+# MAGIC         res.dir_res                             AS direccion_residencial,
+# MAGIC         res.ciu_res_codigo                      AS codigo_ciudad,
+# MAGIC         ciudad.ciudad_residencia,
+# MAGIC         ciudad.departamento,
+# MAGIC         ciudad.pais,
+# MAGIC         aco.pla_ncode                           AS plan,
+# MAGIC         'TITULAR'                               AS rol
+# MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
+# MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
+# MAGIC         ON mem.aco_ncode = aco.aco_ncode
+# MAGIC     LEFT JOIN axa_col_slv_dv.core_bh.bh_sa_person per
+# MAGIC         ON aco.per_ncode = per.per_ncode
+# MAGIC     LEFT JOIN axa_col_slv_dv.core_bh.bh_sa_institution ins
+# MAGIC         ON aco.ins_ncode = ins.ins_ncode
+# MAGIC     LEFT JOIN residencial res
+# MAGIC         ON aco.per_ncode = res.res_per_ncode
+# MAGIC     LEFT JOIN ciudad
+# MAGIC         ON res.ciu_res_codigo = ciudad.ciu_res_codigo
+# MAGIC     WHERE mem.per_ncode = aco.per_ncode
+# MAGIC       AND per.FECHA_CARGUE >= ADD_MONTHS(CURRENT_DATE(), -6)
+# MAGIC ),
+# MAGIC
+# MAGIC -- ============================================================
+# MAGIC -- PASO 4: Beneficiarios (mem.per_ncode <> aco.per_ncode)
+# MAGIC -- ============================================================
+# MAGIC beneficiario AS (
+# MAGIC     SELECT
+# MAGIC         mem.mem_ncode                           AS mem_ncode,
+# MAGIC         mem.per_ncode                           AS mem_per_ncode,
+# MAGIC         mem.aco_ncode                           AS mem_aco_ncode,
+# MAGIC         aco.aco_ncode                           AS aco_ncode,
+# MAGIC         aco.per_ncode                           AS aco_per_ncode,
+# MAGIC         aco.ins_ncode                           AS aco_ins_ncode,
+# MAGIC         per.per_ncode                           AS per_ncode,
+# MAGIC         ins.ins_ncode                           AS ins_ncode,
+# MAGIC         per.TID_NCODE                           AS tipo_documento,
+# MAGIC         per.PER_CIDENTIFICATIONNUMBER           AS numero_documento,
+# MAGIC         per.PER_CFIRSTNAME                      AS primer_nombre,
+# MAGIC         per.PER_CLASTNAME                       AS primer_apellido,
+# MAGIC         per.PER_CMIDDLENAME                     AS segundo_nombre,
+# MAGIC         per.PER_CMOTHERNAME                     AS segundo_apellido,
+# MAGIC         COALESCE(per.PER_CEMAIL, per.PER_CMAIL) AS email,
+# MAGIC         per.PER_CMOBILEPHONE                    AS celular,
+# MAGIC         per.PER_DBIRTHDATE                      AS fecha_nacimiento,
+# MAGIC         per.PER_CGENDER                         AS genero,
+# MAGIC         per.PER_BAUTHPERSONALINFO               AS ATDP,
+# MAGIC         per.EAC_NCODE                           AS actividad_economica,
+# MAGIC         per.MST_NCODE                           AS estado_civil,
+# MAGIC         per.FECHA_CARGUE                        AS per_fecha_cargue,
+# MAGIC         ins.INS_CNAME                           AS nombre_completo_razon_social,
+# MAGIC         ins.INS_CLEGALCODE                      AS eps,
+# MAGIC         ins.INS_BEMAIL_SEND                     AS preferencia_contacto_email,
+# MAGIC         ins.INS_BSMS_SEND                       AS preferencia_contacto_sms,
+# MAGIC         res.dir_res                             AS direccion_residencial,
+# MAGIC         res.ciu_res_codigo                      AS codigo_ciudad,
+# MAGIC         ciudad.ciudad_residencia,
+# MAGIC         ciudad.departamento,
+# MAGIC         ciudad.pais,
+# MAGIC         aco.pla_ncode                           AS plan,
+# MAGIC         'BENEFICIARIO'                          AS rol
+# MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
+# MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
+# MAGIC         ON mem.aco_ncode = aco.aco_ncode
+# MAGIC     LEFT JOIN axa_col_slv_dv.core_bh.bh_sa_person per
+# MAGIC         ON mem.per_ncode = per.per_ncode
+# MAGIC     LEFT JOIN axa_col_slv_dv.core_bh.bh_sa_institution ins
+# MAGIC         ON aco.ins_ncode = ins.ins_ncode
+# MAGIC     LEFT JOIN residencial res
+# MAGIC         ON mem.per_ncode = res.res_per_ncode
+# MAGIC     LEFT JOIN ciudad
+# MAGIC         ON res.ciu_res_codigo = ciudad.ciu_res_codigo
+# MAGIC     WHERE mem.per_ncode <> aco.per_ncode
+# MAGIC       AND per.FECHA_CARGUE >= ADD_MONTHS(CURRENT_DATE(), -6)
+# MAGIC )
+# MAGIC
+# MAGIC -- ============================================================
+# MAGIC -- PASO 5: Resultado final — titulares + beneficiarios
+# MAGIC -- ============================================================
+# MAGIC SELECT * FROM titular
+# MAGIC UNION ALL
+# MAGIC SELECT * FROM beneficiario
 
 # COMMAND ----------
-# Escritura en Unity Catalog (overwrite para reflejar el schema completo)
+# MAGIC %md
+# MAGIC ## Validación — Verificar el resultado
 
-_cat_dst = CONFIG["catalogo_destino"]
-_esq_dst = CONFIG["esquema_destino"]
-_tbl_dst = CONFIG["tabla_destino"]
-_tabla_sql  = f"`{_cat_dst}`.`{_esq_dst}`.`{_tbl_dst}`"   # para spark.sql
-_tabla_save = f"{_cat_dst}.{_esq_dst}.{_tbl_dst}"          # para saveAsTable
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC -- Total de filas por rol
+# MAGIC SELECT
+# MAGIC     rol,
+# MAGIC     COUNT(*)                        AS total_filas,
+# MAGIC     COUNT(DISTINCT numero_documento) AS personas_unicas
+# MAGIC FROM axa_col_slv_dv.stg_cliente.sat_beyond_health
+# MAGIC GROUP BY rol
+# MAGIC ORDER BY rol
 
-spark.sql(f"DROP TABLE IF EXISTS {_tabla_sql}")
-
-(
-    df_resultado
-    .write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-    .saveAsTable(_tabla_save)
-)
-
-print(f"Tabla escrita: {_tabla_save}")
-print(f"Columnas: {len(df_resultado.columns)}")
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC -- Vista previa
+# MAGIC SELECT
+# MAGIC     rol,
+# MAGIC     tipo_documento,
+# MAGIC     numero_documento,
+# MAGIC     primer_nombre,
+# MAGIC     primer_apellido,
+# MAGIC     email,
+# MAGIC     ciudad_residencia,
+# MAGIC     departamento,
+# MAGIC     pais,
+# MAGIC     eps,
+# MAGIC     plan,
+# MAGIC     per_fecha_cargue
+# MAGIC FROM axa_col_slv_dv.stg_cliente.sat_beyond_health
+# MAGIC LIMIT 5
