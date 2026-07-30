@@ -48,7 +48,23 @@
 # MAGIC ),
 # MAGIC
 # MAGIC -- ============================================================
-# MAGIC -- PASO 2: Ciudad y país
+# MAGIC -- PASO 2: Último estado por miembro (equiv. #ext_bh_member_status_history)
+# MAGIC -- Se queda con el mst_ncode más alto por mem_ncode
+# MAGIC -- MSH_DFINALDATE IS NULL indica que el estado sigue vigente
+# MAGIC -- ============================================================
+# MAGIC msh AS (
+# MAGIC     SELECT * FROM (
+# MAGIC         SELECT *,
+# MAGIC                ROW_NUMBER() OVER (
+# MAGIC                    PARTITION BY mem_ncode
+# MAGIC                    ORDER BY mst_ncode DESC
+# MAGIC                ) AS rn
+# MAGIC         FROM axa_col_slv_dv.core_bh.bh_sa_member_status_history
+# MAGIC     ) t WHERE rn = 1
+# MAGIC ),
+# MAGIC
+# MAGIC -- ============================================================
+# MAGIC -- PASO 3: Ciudad y país
 # MAGIC -- dep_ncode presente → ciudad colombiana → Colombia
 # MAGIC -- dep_ncode ausente  → ciudad extranjera → Exterior
 # MAGIC -- ============================================================
@@ -106,6 +122,14 @@
 # MAGIC             WHEN per.per_ncode IS NOT NULL THEN 'Natural'
 # MAGIC             ELSE 'Juridica'
 # MAGIC         END                                     AS tipo_persona,
+# MAGIC         CASE
+# MAGIC             WHEN aco.cty_ncode != 5
+# MAGIC              AND mem.MEM_DSTARTINGDATE <= CURRENT_DATE()
+# MAGIC              AND mem.MEM_DENDINGDATE   >= CURRENT_DATE()
+# MAGIC              AND msh.MSH_DFINALDATE IS NULL
+# MAGIC             THEN 'Activo'
+# MAGIC             ELSE 'No Activo'
+# MAGIC         END                                     AS estado,
 # MAGIC         'TITULAR'                               AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
@@ -118,6 +142,8 @@
 # MAGIC         ON aco.per_ncode = res.res_per_ncode
 # MAGIC     LEFT JOIN ciudad
 # MAGIC         ON res.ciu_res_codigo = ciudad.ciu_res_codigo
+# MAGIC     LEFT JOIN msh
+# MAGIC         ON mem.mem_ncode = msh.mem_ncode
 # MAGIC     WHERE mem.per_ncode = aco.per_ncode
 # MAGIC       AND per.FECHA_CARGUE >= ADD_MONTHS(CURRENT_DATE(), -6)
 # MAGIC ),
@@ -164,6 +190,14 @@
 # MAGIC             WHEN per.per_ncode IS NOT NULL THEN 'Natural'
 # MAGIC             ELSE 'Juridica'
 # MAGIC         END                                     AS tipo_persona,
+# MAGIC         CASE
+# MAGIC             WHEN aco.cty_ncode != 5
+# MAGIC              AND mem.MEM_DSTARTINGDATE <= CURRENT_DATE()
+# MAGIC              AND mem.MEM_DENDINGDATE   >= CURRENT_DATE()
+# MAGIC              AND msh.MSH_DFINALDATE IS NULL
+# MAGIC             THEN 'Activo'
+# MAGIC             ELSE 'No Activo'
+# MAGIC         END                                     AS estado,
 # MAGIC         'BENEFICIARIO'                          AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
@@ -176,6 +210,8 @@
 # MAGIC         ON mem.per_ncode = res.res_per_ncode
 # MAGIC     LEFT JOIN ciudad
 # MAGIC         ON res.ciu_res_codigo = ciudad.ciu_res_codigo
+# MAGIC     LEFT JOIN msh
+# MAGIC         ON mem.mem_ncode = msh.mem_ncode
 # MAGIC     WHERE mem.per_ncode <> aco.per_ncode
 # MAGIC       AND per.FECHA_CARGUE >= ADD_MONTHS(CURRENT_DATE(), -6)
 # MAGIC )
