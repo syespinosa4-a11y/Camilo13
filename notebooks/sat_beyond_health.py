@@ -115,6 +115,11 @@
 # MAGIC         END                                     AS estado,
 # MAGIC         mem.MEM_DSTARTINGDATE                   AS fecha_inicio_vigencia,
 # MAGIC         mem.MEM_DENDINGDATE                     AS fecha_fin_vigencia,
+# MAGIC         CASE aco.CTI_NCODE
+# MAGIC             WHEN 1 THEN 'FAMILIAR'
+# MAGIC             WHEN 3 THEN 'COLECTIVO'
+# MAGIC         END                                     AS tipo_contrato,
+# MAGIC         CONCAT(per.TID_NCODE, per.PER_CIDENTIFICATIONNUMBER) AS llave_negocio,
 # MAGIC         'TITULAR'                               AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
@@ -182,6 +187,11 @@
 # MAGIC         END                                     AS estado,
 # MAGIC         mem.MEM_DSTARTINGDATE                   AS fecha_inicio_vigencia,
 # MAGIC         mem.MEM_DENDINGDATE                     AS fecha_fin_vigencia,
+# MAGIC         CASE aco.CTI_NCODE
+# MAGIC             WHEN 1 THEN 'FAMILIAR'
+# MAGIC             WHEN 3 THEN 'COLECTIVO'
+# MAGIC         END                                     AS tipo_contrato,
+# MAGIC         CONCAT(per.TID_NCODE, per.PER_CIDENTIFICATIONNUMBER) AS llave_negocio,
 # MAGIC         'BENEFICIARIO'                          AS rol
 # MAGIC     FROM axa_col_slv_dv.core_bh.bh_sa_member mem
 # MAGIC     INNER JOIN axa_col_slv_dv.core_bh.bh_sa_affiliation_contract aco
