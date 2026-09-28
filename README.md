@@ -1,2 +1,3 @@
 # Camilo13
-d
+
+📚 [Curso corto de Claude Code + laboratorio](curso-claude-code/README.md)
