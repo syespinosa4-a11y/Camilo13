@@ -1,0 +1,36 @@
+# Databricks Asset Bundle del curso (Módulo 9)
+# Uso:
+#   cd curso-databricks/laboratorio
+#   databricks auth login --host https://<tu-workspace>
+#   databricks bundle validate
+#   databricks bundle deploy -t dev
+#   databricks bundle run -t dev medallon_pedidos
+bundle:
+  name: curso_databricks
+
+include:
+  - resources/*.yml
+
+variables:
+  catalogo:
+    description: Catálogo de Unity Catalog
+    default: workspace
+  esquema:
+    description: Esquema de trabajo
+    default: curso_db
+
+targets:
+  dev:
+    # En modo development los recursos llevan el prefijo "[dev tu_usuario]" y los schedules quedan en pausa
+    mode: development
+    default: true
+    workspace:
+      host: https://TU-WORKSPACE.cloud.databricks.com   # ← cámbialo
+
+  prod:
+    mode: production
+    workspace:
+      host: https://TU-WORKSPACE.cloud.databricks.com
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      esquema: curso_db_prod

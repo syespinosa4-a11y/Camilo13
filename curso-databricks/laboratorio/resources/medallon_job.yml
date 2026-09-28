@@ -1,0 +1,32 @@
+resources:
+  jobs:
+    medallon_pedidos:
+      name: medallon-pedidos
+      description: Genera un lote, lo ingiere (bronze → silver → gold) y valida la calidad.
+      parameters:            # llegan a los widgets de los notebooks
+        - name: catalogo
+          default: ${var.catalogo}
+        - name: esquema
+          default: ${var.esquema}
+      tasks:
+        - task_key: ingesta_medallon
+          notebook_task:
+            notebook_path: ../notebooks/03_autoloader_medallon.py
+            base_parameters:
+              generar_lote: "si"
+          max_retries: 1
+
+        - task_key: control_calidad
+          depends_on:
+            - task_key: ingesta_medallon
+          notebook_task:
+            notebook_path: ../notebooks/07_tarea_calidad.py
+            base_parameters:
+              max_pct_cuarentena: "20"
+      # Sin cluster definido → se ejecuta en compute serverless
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"   # todos los días a las 7:00
+        timezone_id: America/Bogota
+        pause_status: PAUSED
+      email_notifications:
+        on_failure: []        # añade tu email aquí

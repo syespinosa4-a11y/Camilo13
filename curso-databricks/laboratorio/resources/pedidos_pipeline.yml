@@ -1,0 +1,10 @@
+resources:
+  pipelines:
+    pedidos_lakeflow:
+      name: pedidos-lakeflow
+      catalog: ${var.catalogo}
+      schema: ${var.esquema}
+      serverless: true
+      libraries:
+        - notebook:
+            path: ../notebooks/04_pipeline_declarativo.sql
