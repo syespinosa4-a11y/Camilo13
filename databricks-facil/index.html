@@ -1,0 +1,503 @@
+<title>Databricks Paso a Paso</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: índice fijo a la izquierda (escritorio) + lecciones en una columna de lectura; en móvil, una sola columna con barra de progreso arriba */
+:root {
+  --bg: #f5f7f6;
+  --surface: #ffffff;
+  --ink: #17221e;
+  --muted: #56645e;
+  --line: #d9e1dd;
+  --accent: #0b7a5a;
+  --accent-soft: #e2f3ec;
+  --tip: #8a5a00;
+  --tip-soft: #fff4dc;
+  --code-bg: #12201b;
+  --code-ink: #e6f1ec;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1614; --surface: #16201d; --ink: #e5eee9; --muted: #9aaba3; --line: #2a3833;
+    --accent: #3ccf9b; --accent-soft: #173a2e; --tip: #f2c062; --tip-soft: #352a12;
+    --code-bg: #0a110f; --code-ink: #dcebe4; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1614; --surface: #16201d; --ink: #e5eee9; --muted: #9aaba3; --line: #2a3833;
+  --accent: #3ccf9b; --accent-soft: #173a2e; --tip: #f2c062; --tip-soft: #352a12;
+  --code-bg: #0a110f; --code-ink: #dcebe4; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 1.0625rem; line-height: 1.6;
+  padding-inline: 16px;
+}
+.wrap {
+  max-width: 1120px; margin: 0 auto; padding-block: 32px 80px;
+  display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 48px;
+}
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+/* Índice */
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; display: grid; gap: 16px; }
+@media (max-width: 860px) { nav.toc { position: static; } }
+.brand { font-family: var(--font-display); font-weight: 800; font-size: 1.25rem; line-height: 1.2; }
+.progress { display: grid; gap: 6px; }
+.progress-bar { height: 10px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
+.progress-label { font-size: .9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.toc a {
+  display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: 8px;
+  color: var(--ink); text-decoration: none; font-size: .95rem; line-height: 1.35;
+}
+.toc a:hover { background: var(--accent-soft); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.toc .n { font-family: var(--font-mono); font-size: .8rem; color: var(--muted); min-width: 1.6em; font-variant-numeric: tabular-nums; }
+.toc a.done .n { color: var(--accent); }
+.toc a.done .n::before { content: "✓"; }
+.toc a.done .n span { display: none; }
+@media (max-width: 860px) { .toc ol { display: none; } }
+
+/* Contenido */
+main { min-width: 0; display: grid; gap: 56px; }
+.intro h1 {
+  font-family: var(--font-display); font-weight: 800; font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.05; margin: 0 0 12px; text-wrap: balance; letter-spacing: -.01em;
+}
+.intro p { max-width: 62ch; margin: 0 0 12px; }
+.lead { font-size: 1.2rem; color: var(--muted); }
+.howto { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px; }
+.howto div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: .95rem; }
+.howto b { display: block; font-family: var(--font-display); font-size: 1rem; margin-bottom: 2px; }
+
+section.lesson { scroll-margin-top: 24px; display: grid; gap: 16px; max-width: 72ch; }
+.lesson-head { display: flex; gap: 16px; align-items: flex-start; }
+.badge {
+  flex: none; width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent); font-family: var(--font-display); font-weight: 800; font-size: 1.3rem;
+}
+.lesson-head h2 { font-family: var(--font-display); font-weight: 800; font-size: 1.6rem; line-height: 1.15; margin: 0; text-wrap: balance; }
+.meta { font-size: .85rem; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; margin-top: 4px; }
+.lesson p { margin: 0; }
+.goal { font-size: 1.1rem; }
+h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.1rem; margin: 8px 0 0; }
+
+ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 8px; }
+ol.steps > li::before {
+  content: counter(s); font-family: var(--font-mono); font-weight: 600; font-size: .85rem;
+  width: 1.7rem; height: 1.7rem; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent);
+  display: grid; place-items: center; margin-top: .1rem;
+}
+ol.steps > li > div { min-width: 0; display: grid; gap: 8px; }
+.ui { font-weight: 700; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+code.i { font-family: var(--font-mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+
+.code { position: relative; background: var(--code-bg); border-radius: 10px; min-width: 0; }
+.code pre {
+  margin: 0; padding: 16px 16px 16px 16px; padding-right: 92px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: .88rem; line-height: 1.55; color: var(--code-ink);
+}
+.code .lang { position: absolute; left: 14px; top: -10px; font-family: var(--font-mono); font-size: .7rem; background: var(--accent); color: var(--bg); padding: 1px 8px; border-radius: 99px; letter-spacing: .05em; }
+button.copy {
+  position: absolute; top: 10px; right: 10px; font: 600 .8rem var(--font-body);
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+}
+button.copy:hover { border-color: var(--accent); }
+button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.see { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 10px 10px 0; }
+.tip { border-left: 4px solid var(--tip); background: var(--tip-soft); padding: 10px 14px; border-radius: 0 10px 10px 0; }
+.see b, .tip b { display: block; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; }
+.tip b { color: var(--tip); } .see b { color: var(--accent); }
+
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+details > summary { cursor: pointer; font-weight: 700; }
+details[open] > summary { margin-bottom: 10px; }
+details .code { margin-top: 8px; }
+
+.done-row { display: flex; align-items: center; gap: 12px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.done-row input { width: 22px; height: 22px; accent-color: var(--accent); cursor: pointer; }
+.done-row label { font-weight: 700; cursor: pointer; }
+
+table.gloss { border-collapse: collapse; width: 100%; font-size: .95rem; }
+.gloss-wrap { overflow-x: auto; }
+table.gloss td { border-top: 1px solid var(--line); padding: 8px 10px; vertical-align: top; }
+table.gloss td:first-child { font-weight: 700; white-space: nowrap; }
+
+a { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .progress-fill { transition: none; } html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Lecciones">
+    <div class="brand">Databricks<br>Paso a Paso</div>
+    <div class="progress">
+      <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
+      <div class="progress-label" id="plabel">0 de 9 lecciones terminadas</div>
+    </div>
+    <ol id="toc"></ol>
+  </nav>
+
+  <main>
+    <header class="intro">
+      <h1>Aprende Databricks haciendo, una lección a la vez</h1>
+      <p class="lead">9 lecciones cortas, de 20 a 40 minutos cada una. No necesitas saber programar ni instalar nada.</p>
+      <p>Cada lección te dice <b>exactamente dónde hacer clic</b>, te da el código listo para <b>copiar y pegar</b>, y te muestra <b>qué deberías ver</b> para que sepas que lo hiciste bien.</p>
+      <div class="howto">
+        <div><b>Abre dos ventanas</b>Esta página a un lado y Databricks al otro.</div>
+        <div><b>Copia y pega</b>Usa el botón «Copiar» de cada bloque de código.</div>
+        <div><b>Marca tu avance</b>Al final de cada lección marca «Lo terminé». Se guarda en este navegador.</div>
+      </div>
+    </header>
+
+    <!-- 1 -->
+    <section class="lesson" id="l1" data-title="Qué es y crear tu cuenta">
+      <div class="lesson-head"><div class="badge">1</div><div><h2>Qué es Databricks y crear tu cuenta gratis</h2><div class="meta">20 minutos</div></div></div>
+      <p class="goal">Databricks es un lugar en internet para <b>guardar muchísimos datos y hacerles preguntas</b>. Piensa en un Excel gigante en la nube, que aguanta millones de filas sin trabarse y donde trabajan muchas personas a la vez.</p>
+      <p>Las empresas lo usan para juntar los datos de ventas, clientes o sensores en un solo sitio, limpiarlos, sacar informes y entrenar modelos de inteligencia artificial.</p>
+      <h3>Crea tu cuenta</h3>
+      <ol class="steps">
+        <li><div>Abre <a href="https://www.databricks.com/learn/free-edition" target="_blank" rel="noopener">databricks.com/learn/free-edition</a>. Si el enlace no abre, busca en Google <b>«Databricks Free Edition»</b>.</div></li>
+        <li><div>Pulsa <span class="ui">Sign up</span> y regístrate con tu correo o con tu cuenta de Google.</div></li>
+        <li><div>Espera un par de minutos mientras se crea tu espacio de trabajo. Se abrirá solo.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una página con un menú a la izquierda: <span class="ui">Workspace</span>, <span class="ui">Catalog</span>, <span class="ui">Jobs &amp; Pipelines</span>, <span class="ui">SQL Editor</span>… Ese menú es tu mapa. No te preocupes por entenderlo todo.</div>
+      <div class="tip"><b>Tranquilo</b>La Free Edition es gratis para siempre y no pide tarjeta. Nada de lo que hagas aquí cuesta dinero ni puede romper nada importante.</div>
+    </section>
+
+    <!-- 2 -->
+    <section class="lesson" id="l2" data-title="Tu primer notebook">
+      <div class="lesson-head"><div class="badge">2</div><div><h2>Tu primer notebook</h2><div class="meta">20 minutos</div></div></div>
+      <p class="goal">Un <b>notebook</b> es una hoja donde escribes instrucciones en cajitas llamadas <b>celdas</b>. Ejecutas una celda y el resultado aparece justo debajo.</p>
+      <ol class="steps">
+        <li><div>En el menú izquierdo pulsa <span class="ui">+ New</span> y luego <span class="ui">Notebook</span>.</div></li>
+        <li><div>Arriba a la izquierda verás «Untitled Notebook…». Haz clic en ese nombre y cámbialo por <b>Mi primer notebook</b>.</div></li>
+        <li><div>Arriba a la derecha, en el botón <span class="ui">Connect</span>, elige <span class="ui">Serverless</span>. Eso enciende la «computadora» que va a ejecutar tus instrucciones.</div></li>
+        <li><div>Pega esto en la primera celda y pulsa <b>Shift + Enter</b> (las dos teclas a la vez):
+          <div class="code"><span class="lang">PYTHON</span><pre>print("¡Hola, Databricks!")</pre></div></div></li>
+        <li><div>Para crear otra celda, pasa el ratón por debajo de la celda y pulsa <span class="ui">+ Code</span>. Pega esto y ejecútalo:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT 2 + 2 AS resultado</pre></div>
+          <p>La primera línea, <code class="i">%sql</code>, le dice a la celda que vas a escribir en <b>SQL</b>, el idioma para hacerle preguntas a los datos.</p></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Debajo de la primera celda, el texto <i>¡Hola, Databricks!</i>. Debajo de la segunda, una tablita con una columna «resultado» y el número 4.</div>
+      <div class="tip"><b>Si algo falla</b>Si sale un error rojo, revisa que hayas copiado todo el bloque y que arriba a la derecha diga que estás conectado. Puedes volver a ejecutar una celda cuantas veces quieras.</div>
+    </section>
+
+    <!-- 3 -->
+    <section class="lesson" id="l3" data-title="Mirar datos reales">
+      <div class="lesson-head"><div class="badge">3</div><div><h2>Mirar datos reales y hacer un gráfico</h2><div class="meta">25 minutos</div></div></div>
+      <p class="goal">Databricks trae datos de ejemplo: miles de <b>viajes en taxi de Nueva York</b>. Los vas a mirar y a convertir en un gráfico.</p>
+      <ol class="steps">
+        <li><div>En tu notebook crea una celda nueva, pega esto y ejecútalo con Shift + Enter:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT * FROM samples.nyctaxi.trips LIMIT 10</pre></div>
+          <p><code class="i">SELECT *</code> significa «muéstrame todas las columnas» y <code class="i">LIMIT 10</code> «solo 10 filas».</p></div></li>
+        <li><div>¿Cuántos viajes hay en total?
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT COUNT(*) AS total_viajes FROM samples.nyctaxi.trips</pre></div></div></li>
+        <li><div>¿A qué hora del día hay más viajes?
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT HOUR(tpep_pickup_datetime) AS hora,
+       COUNT(*) AS viajes
+FROM samples.nyctaxi.trips
+GROUP BY hora
+ORDER BY hora</pre></div></div></li>
+        <li><div>Ahora haz el gráfico: encima de la tabla de resultados pulsa el <span class="ui">+</span> que está junto a «Table» y elige <span class="ui">Visualization</span>. Escoge el tipo <span class="ui">Bar</span>, pon <b>hora</b> en el eje X y <b>viajes</b> en el eje Y. Pulsa <span class="ui">Save</span>.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una tabla con columnas como <i>trip_distance</i> (distancia) y <i>fare_amount</i> (precio), y después un gráfico de barras donde se nota qué horas tienen más taxis.</div>
+      <h3>Explora tú</h3>
+      <p>En el menú izquierdo entra a <span class="ui">Catalog</span> → <span class="ui">samples</span> → <span class="ui">nyctaxi</span> → <span class="ui">trips</span>. Ahí ves las columnas de la tabla y una muestra de los datos, sin escribir nada.</p>
+    </section>
+
+    <!-- 4 -->
+    <section class="lesson" id="l4" data-title="Hacer preguntas con SQL">
+      <div class="lesson-head"><div class="badge">4</div><div><h2>Hacer preguntas a los datos con SQL</h2><div class="meta">40 minutos</div></div></div>
+      <p class="goal">Con solo 5 palabras de SQL puedes responder casi cualquier pregunta. Apréndetelas así:</p>
+      <div class="gloss-wrap"><table class="gloss">
+        <tr><td>SELECT</td><td>¿Qué columnas quiero ver?</td></tr>
+        <tr><td>FROM</td><td>¿De qué tabla?</td></tr>
+        <tr><td>WHERE</td><td>¿Con qué condición? (filtrar filas)</td></tr>
+        <tr><td>GROUP BY</td><td>¿Agrupado por qué? (para sumar o contar por grupos)</td></tr>
+        <tr><td>ORDER BY</td><td>¿En qué orden? (<code class="i">DESC</code> = de mayor a menor)</td></tr>
+      </table></div>
+      <p>Ejemplo: los 5 viajes más caros de más de 10 millas.</p>
+      <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT trip_distance, fare_amount
+FROM samples.nyctaxi.trips
+WHERE trip_distance &gt; 10
+ORDER BY fare_amount DESC
+LIMIT 5</pre></div>
+      <h3>Ejercicios: inténtalo antes de mirar la respuesta</h3>
+      <details><summary>1. ¿Cuál es el precio promedio de un viaje?</summary>
+        <p>Pista: <code class="i">AVG(columna)</code> calcula el promedio.</p>
+        <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT ROUND(AVG(fare_amount), 2) AS precio_promedio
+FROM samples.nyctaxi.trips</pre></div></details>
+      <details><summary>2. ¿Cuántos viajes fueron de menos de 1 milla?</summary>
+        <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT COUNT(*) AS viajes_cortos
+FROM samples.nyctaxi.trips
+WHERE trip_distance &lt; 1</pre></div></details>
+      <details><summary>3. ¿Cuáles son los 10 códigos postales donde más gente toma un taxi?</summary>
+        <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT pickup_zip, COUNT(*) AS viajes
+FROM samples.nyctaxi.trips
+GROUP BY pickup_zip
+ORDER BY viajes DESC
+LIMIT 10</pre></div></details>
+      <details><summary>4. ¿Qué día de la semana se gana más dinero?</summary>
+        <p>Pista: <code class="i">DAYNAME(fecha)</code> da el nombre del día y <code class="i">SUM(columna)</code> suma.</p>
+        <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT DAYNAME(tpep_pickup_datetime) AS dia,
+       ROUND(SUM(fare_amount), 0) AS dinero_total
+FROM samples.nyctaxi.trips
+GROUP BY dia
+ORDER BY dinero_total DESC</pre></div></details>
+      <div class="tip"><b>Truco</b>En cualquier celda puedes pedirle ayuda al asistente de IA de Databricks (el icono de estrellitas). Escríbele en español, por ejemplo: «escribe una consulta que muestre el viaje más largo».</div>
+    </section>
+
+    <!-- 5 -->
+    <section class="lesson" id="l5" data-title="Crear tus propias tablas">
+      <div class="lesson-head"><div class="badge">5</div><div><h2>Crear tus propias tablas</h2><div class="meta">30 minutos</div></div></div>
+      <p class="goal">Hasta ahora solo has mirado datos. Ahora vas a crear una tabla tuya, la de una pequeña tienda de café, y a cambiarla.</p>
+      <p>En Databricks los datos se ordenan como en un archivador: <b>catálogo</b> (el mueble) → <b>esquema</b> (el cajón) → <b>tabla</b> (la carpeta). Tu mueble se llama <code class="i">workspace</code>. Vas a crear un cajón llamado <code class="i">mi_tienda</code>.</p>
+      <ol class="steps">
+        <li><div>Crea el cajón y la tabla:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+CREATE SCHEMA IF NOT EXISTS workspace.mi_tienda;
+
+CREATE TABLE IF NOT EXISTS workspace.mi_tienda.productos (
+  id INT,
+  nombre STRING,
+  precio DOUBLE,
+  stock INT
+);</pre></div></div></li>
+        <li><div>Mete productos (<code class="i">INSERT</code> = agregar filas):
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+INSERT INTO workspace.mi_tienda.productos VALUES
+  (1, 'Café molido', 12.50, 100),
+  (2, 'Taza', 6.00, 40),
+  (3, 'Filtro', 3.20, 300);
+
+SELECT * FROM workspace.mi_tienda.productos;</pre></div></div></li>
+        <li><div>Cambia un precio (<code class="i">UPDATE</code>) y borra un producto (<code class="i">DELETE</code>):
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+UPDATE workspace.mi_tienda.productos SET precio = 13.90 WHERE id = 1;
+DELETE FROM workspace.mi_tienda.productos WHERE id = 3;
+
+SELECT * FROM workspace.mi_tienda.productos;</pre></div></div></li>
+        <li><div>Ahora lo mejor: Databricks <b>recuerda cada cambio</b>. Mira el historial:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+DESCRIBE HISTORY workspace.mi_tienda.productos</pre></div></div></li>
+        <li><div>¿Te equivocaste? Puedes volver al pasado. Busca en el historial la versión del INSERT (columna <i>version</i>, normalmente la 1) y restáurala:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+RESTORE TABLE workspace.mi_tienda.productos TO VERSION AS OF 1;
+
+SELECT * FROM workspace.mi_tienda.productos;</pre></div></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Al final vuelven a estar los 3 productos con su precio original. En el historial aparece una fila por cada cambio que hiciste.</div>
+      <div class="tip"><b>Por qué importa</b>Esto funciona porque las tablas de Databricks usan un formato llamado <b>Delta Lake</b>, que guarda el historial. En un Excel normal, si borras algo y guardas, no hay vuelta atrás.</div>
+    </section>
+
+    <!-- 6 -->
+    <section class="lesson" id="l6" data-title="Subir tu propio archivo">
+      <div class="lesson-head"><div class="badge">6</div><div><h2>Subir tu propio archivo (CSV o Excel)</h2><div class="meta">25 minutos</div></div></div>
+      <p class="goal">En la vida real tendrás datos en archivos. Vas a subir uno y convertirlo en tabla.</p>
+      <ol class="steps">
+        <li><div>Pulsa «Copiar», abre el Bloc de notas (o cualquier editor de texto), pega y guarda el archivo como <b>ventas.csv</b>:
+          <div class="code"><span class="lang">CSV</span><pre>fecha,ciudad,producto,cantidad,precio
+2026-09-01,Bogotá,Café molido,3,12.5
+2026-09-01,Medellín,Taza,2,6.0
+2026-09-02,Cali,Café molido,1,12.5
+2026-09-02,Bogotá,Filtro,10,3.2
+2026-09-03,Medellín,Café molido,4,12.5
+2026-09-03,Barranquilla,Taza,1,6.0
+2026-09-04,Bogotá,Taza,5,6.0
+2026-09-04,Cali,Filtro,6,3.2
+2026-09-05,Bogotá,Café molido,2,12.5
+2026-09-05,Medellín,Filtro,8,3.2</pre></div>
+          <p>Si tienes un Excel, en Excel usa <i>Guardar como → CSV</i>.</p></div></li>
+        <li><div>En Databricks pulsa <span class="ui">+ New</span> → <span class="ui">Add or upload data</span> → <span class="ui">Create or modify table</span>.</div></li>
+        <li><div>Arrastra tu archivo <b>ventas.csv</b> a la ventana.</div></li>
+        <li><div>Arriba elige el catálogo <b>workspace</b>, el esquema <b>mi_tienda</b> y como nombre de tabla <b>ventas</b>. Revisa la vista previa y pulsa <span class="ui">Create table</span>.</div></li>
+        <li><div>Vuelve a tu notebook y pregúntale cosas a tu tabla:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+SELECT ciudad,
+       SUM(cantidad * precio) AS total_vendido
+FROM workspace.mi_tienda.ventas
+GROUP BY ciudad
+ORDER BY total_vendido DESC</pre></div></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Bogotá arriba de todo, con el mayor total vendido. Tu tabla también aparece en <span class="ui">Catalog</span> → <span class="ui">workspace</span> → <span class="ui">mi_tienda</span>.</div>
+    </section>
+
+    <!-- 7 -->
+    <section class="lesson" id="l7" data-title="Un poco de Python">
+      <div class="lesson-head"><div class="badge">7</div><div><h2>Lo mismo, pero con Python</h2><div class="meta">30 minutos</div></div></div>
+      <p class="goal">SQL alcanza para mucho. Pero en los trabajos de datos también se usa <b>Python</b> (con una herramienta llamada <b>PySpark</b>). Aquí ves que hace lo mismo con otras palabras.</p>
+      <ol class="steps">
+        <li><div>En una celda nueva, <b>sin</b> <code class="i">%sql</code>, pega esto:
+          <div class="code"><span class="lang">PYTHON</span><pre>ventas = spark.table("workspace.mi_tienda.ventas")
+display(ventas)</pre></div>
+          <p><code class="i">spark.table</code> abre la tabla y <code class="i">display</code> la muestra bonita, igual que antes.</p></div></li>
+        <li><div>El total vendido por ciudad, como en la lección 6:
+          <div class="code"><span class="lang">PYTHON</span><pre>from pyspark.sql import functions as F
+
+resumen = (ventas
+    .withColumn("total", F.col("cantidad") * F.col("precio"))   # columna nueva
+    .groupBy("ciudad")                                           # agrupar
+    .agg(F.sum("total").alias("total_vendido"))                  # sumar
+    .orderBy(F.desc("total_vendido")))                           # ordenar
+
+display(resumen)</pre></div></div></li>
+        <li><div>Guarda el resultado como una tabla nueva:
+          <div class="code"><span class="lang">PYTHON</span><pre>resumen.write.mode("overwrite").saveAsTable("workspace.mi_tienda.ventas_por_ciudad")
+print("Tabla guardada ✔")</pre></div></div></li>
+      </ol>
+      <div class="gloss-wrap"><table class="gloss">
+        <tr><td>SQL</td><td>Python (PySpark)</td></tr>
+        <tr><td>WHERE precio &gt; 5</td><td>.filter(F.col("precio") &gt; 5)</td></tr>
+        <tr><td>GROUP BY ciudad</td><td>.groupBy("ciudad")</td></tr>
+        <tr><td>SUM(x)</td><td>.agg(F.sum("x"))</td></tr>
+        <tr><td>ORDER BY x DESC</td><td>.orderBy(F.desc("x"))</td></tr>
+      </table></div>
+      <div class="tip"><b>No te agobies</b>Si te gusta más SQL, quédate con SQL. Con SQL se puede hacer casi todo en Databricks. Python lo irás aprendiendo después.</div>
+    </section>
+
+    <!-- 8 -->
+    <section class="lesson" id="l8" data-title="Automatizar con un Job">
+      <div class="lesson-head"><div class="badge">8</div><div><h2>Que se ejecute solo cada día</h2><div class="meta">25 minutos</div></div></div>
+      <p class="goal">Un <b>Job</b> es una tarea programada: «ejecuta este notebook todos los días a las 7 de la mañana». Así nadie tiene que hacerlo a mano.</p>
+      <ol class="steps">
+        <li><div>Crea un notebook nuevo llamado <b>Actualizar resumen</b>, conéctalo a Serverless y pon en él solo esta celda:
+          <div class="code"><span class="lang">SQL</span><pre>%sql
+CREATE OR REPLACE TABLE workspace.mi_tienda.ventas_por_ciudad AS
+SELECT ciudad, SUM(cantidad * precio) AS total_vendido, current_timestamp() AS actualizado
+FROM workspace.mi_tienda.ventas
+GROUP BY ciudad</pre></div></div></li>
+        <li><div>En el menú izquierdo pulsa <span class="ui">Jobs &amp; Pipelines</span> → <span class="ui">Create</span> → <span class="ui">Job</span>.</div></li>
+        <li><div>Ponle de nombre <b>Resumen diario</b>. En la tarea: tipo <span class="ui">Notebook</span>, en <i>Path</i> elige tu notebook <b>Actualizar resumen</b> y en <i>Compute</i> deja <span class="ui">Serverless</span>. Pulsa <span class="ui">Create task</span>.</div></li>
+        <li><div>Pulsa <span class="ui">Run now</span> para probarlo ya. Abre la ejecución y espera a que diga <b>Succeeded</b> en verde.</div></li>
+        <li><div>A la derecha, en <i>Schedules &amp; Triggers</i>, pulsa <span class="ui">Add trigger</span> → <span class="ui">Scheduled</span> y elige todos los días a las 7:00. Guarda.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una ejecución en verde y, en la tabla <i>ventas_por_ciudad</i>, la columna <i>actualizado</i> con la hora de la ejecución.</div>
+      <div class="tip"><b>Para no gastar tu cuota gratis</b>Cuando termines de practicar, en el Job pulsa <span class="ui">Pause</span> en el horario.</div>
+    </section>
+
+    <!-- 9 -->
+    <section class="lesson" id="l9" data-title="Un dashboard">
+      <div class="lesson-head"><div class="badge">9</div><div><h2>Tu primer dashboard</h2><div class="meta">30 minutos</div></div></div>
+      <p class="goal">Un <b>dashboard</b> es un tablero con gráficos que tu jefe o tu cliente pueden mirar sin saber SQL.</p>
+      <ol class="steps">
+        <li><div>Pulsa <span class="ui">+ New</span> → <span class="ui">Dashboard</span>.</div></li>
+        <li><div>Arriba, ve a la pestaña <span class="ui">Data</span> y pulsa <span class="ui">Create from SQL</span>. Pega esta consulta y ejecútala:
+          <div class="code"><span class="lang">SQL</span><pre>SELECT fecha, ciudad, producto, cantidad, precio,
+       cantidad * precio AS total
+FROM workspace.mi_tienda.ventas</pre></div></div></li>
+        <li><div>Vuelve a la pestaña del tablero (normalmente se llama <i>Untitled page</i>) y pulsa el botón para <b>añadir una visualización</b>. Haz estos 3 gráficos:
+          <ul>
+            <li><b>Contador</b> (Counter): la suma de <i>total</i>. Es lo que se vendió en total.</li>
+            <li><b>Barras</b> (Bar): <i>ciudad</i> en el eje X y la suma de <i>total</i> en el eje Y.</li>
+            <li><b>Líneas</b> (Line): <i>fecha</i> en el eje X y la suma de <i>total</i> en el eje Y.</li>
+          </ul>
+          <p>También puedes escribirle al asistente en la caja de la visualización, por ejemplo: «gráfico de barras de ventas por ciudad».</p></div></li>
+        <li><div>Añade un <b>filtro</b> por <i>ciudad</i> para que quien lo mire pueda elegir una ciudad.</div></li>
+        <li><div>Pulsa <span class="ui">Publish</span>. Ya tienes un enlace para compartirlo.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Un tablero con el total vendido, las barras por ciudad y la línea por día. Al cambiar el filtro de ciudad, todo se actualiza.</div>
+      <div class="tip"><b>Extra: Genie</b>Prueba <span class="ui">+ New</span> → <span class="ui">Genie space</span>, añade tu tabla <i>ventas</i> y pregúntale en español: «¿qué producto vendió más?». Genie escribe el SQL por ti.</div>
+    </section>
+
+    <!-- Final -->
+    <section class="lesson" id="fin" data-skip="1">
+      <div class="lesson-head"><div class="badge">✓</div><div><h2>¿Terminaste las 9? Esto es lo que ya sabes</h2></div></div>
+      <p>Sabes crear notebooks, consultar datos con SQL, crear y modificar tablas, recuperar datos borrados, subir archivos, usar algo de Python, automatizar tareas y hacer dashboards. Eso ya es el día a día de mucha gente que trabaja con datos.</p>
+      <h3>Cuando quieras seguir</h3>
+      <ol class="steps">
+        <li><div><b>Repite las lecciones 4 y 5 con tus propios datos</b>, de tu trabajo o de <a href="https://www.datos.gov.co" target="_blank" rel="noopener">datos.gov.co</a>. Es la mejor práctica que hay.</div></li>
+        <li><div><b>Databricks Academy</b> tiene cursos gratuitos en video: busca «Databricks Academy free courses». Empieza por <i>Databricks Fundamentals</i>.</div></li>
+        <li><div>Cuando te sientas cómodo, el curso avanzado de tu repositorio (carpeta <code class="i">curso-databricks</code>) cubre ingesta automática de archivos, pipelines, machine learning y despliegue. Y te prepara para la certificación <i>Data Engineer Associate</i>.</div></li>
+      </ol>
+      <h3>Palabras que vas a oír</h3>
+      <div class="gloss-wrap"><table class="gloss">
+        <tr><td>Workspace</td><td>Tu espacio de trabajo en Databricks.</td></tr>
+        <tr><td>Notebook</td><td>Hoja con celdas de código que ejecutas una a una.</td></tr>
+        <tr><td>Compute / Serverless</td><td>La computadora que ejecuta tu código. «Serverless» quiere decir que Databricks la enciende y apaga por ti.</td></tr>
+        <tr><td>Catálogo → Esquema → Tabla</td><td>Mueble → cajón → carpeta. Así se ordenan los datos.</td></tr>
+        <tr><td>Unity Catalog</td><td>El sistema que guarda ese orden y decide quién puede ver qué.</td></tr>
+        <tr><td>Delta Lake</td><td>El formato de las tablas: guarda historial y permite deshacer cambios.</td></tr>
+        <tr><td>Spark / PySpark</td><td>El motor que procesa los datos repartiendo el trabajo entre muchas computadoras. PySpark es usarlo desde Python.</td></tr>
+        <tr><td>Job</td><td>Tarea programada que se ejecuta sola.</td></tr>
+        <tr><td>Dashboard</td><td>Tablero de gráficos para compartir.</td></tr>
+        <tr><td>Genie</td><td>Asistente al que le preguntas por tus datos en español.</td></tr>
+      </table></div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function () {
+  var KEY = "dbx-paso-a-paso-v1";
+  var lessons = Array.prototype.slice.call(document.querySelectorAll("section.lesson:not([data-skip])"));
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+  var toc = document.getElementById("toc");
+  lessons.forEach(function (sec, i) {
+    var li = document.createElement("li");
+    var a = document.createElement("a");
+    a.href = "#" + sec.id;
+    a.id = "toc-" + sec.id;
+    a.innerHTML = '<span class="n"><span>' + (i + 1) + '</span></span><span></span>';
+    a.lastChild.textContent = sec.getAttribute("data-title");
+    li.appendChild(a); toc.appendChild(li);
+
+    var row = document.createElement("div");
+    row.className = "done-row";
+    var cb = document.createElement("input");
+    cb.type = "checkbox"; cb.id = "done-" + sec.id; cb.checked = !!state[sec.id];
+    var lb = document.createElement("label");
+    lb.htmlFor = cb.id; lb.textContent = "Lo terminé";
+    cb.addEventListener("change", function () { state[sec.id] = cb.checked; save(); render(); });
+    row.appendChild(cb); row.appendChild(lb); sec.appendChild(row);
+  });
+
+  function render() {
+    var n = 0;
+    lessons.forEach(function (sec) {
+      var d = !!state[sec.id]; if (d) n++;
+      document.getElementById("toc-" + sec.id).classList.toggle("done", d);
+    });
+    document.getElementById("fill").style.width = (100 * n / lessons.length) + "%";
+    document.getElementById("plabel").textContent = n + " de " + lessons.length + " lecciones terminadas";
+  }
+  render();
+
+  document.querySelectorAll(".code").forEach(function (box) {
+    var btn = document.createElement("button");
+    btn.className = "copy"; btn.type = "button"; btn.textContent = "Copiar";
+    btn.addEventListener("click", function () {
+      var text = box.querySelector("pre").textContent;
+      function ok() { btn.textContent = "¡Copiado!"; setTimeout(function () { btn.textContent = "Copiar"; }, 1500); }
+      function fallback() {
+        var r = document.createRange(); r.selectNodeContents(box.querySelector("pre"));
+        var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        btn.textContent = "Pulsa Ctrl+C";
+      }
+      try { navigator.clipboard.writeText(text).then(ok, fallback); } catch (e) { fallback(); }
+    });
+    box.appendChild(btn);
+  });
+})();
+</script>
