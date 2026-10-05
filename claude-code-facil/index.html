@@ -1,0 +1,426 @@
+<title>Claude Code Paso a Paso</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Sora:wght@600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: índice fijo a la izquierda (escritorio) + lecciones en una columna; los prompts se ven como mensajes de chat, el código como terminal */
+:root {
+  --bg: #f4f5f9;
+  --surface: #ffffff;
+  --ink: #1a1d2b;
+  --muted: #5a5f75;
+  --line: #dadded;
+  --accent: #3445c4;
+  --accent-soft: #e6e9fb;
+  --tip: #8a5a00;
+  --tip-soft: #fff4dc;
+  --code-bg: #161a2b;
+  --code-ink: #e4e7f5;
+  --prompt-bg: #eef0fc;
+  --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10121c; --surface: #181b29; --ink: #e6e8f2; --muted: #a0a5bd; --line: #2b2f45;
+    --accent: #8f9bff; --accent-soft: #24294a; --tip: #f2c062; --tip-soft: #352a12;
+    --code-bg: #0b0d16; --code-ink: #dfe3f5; --prompt-bg: #1f2340; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10121c; --surface: #181b29; --ink: #e6e8f2; --muted: #a0a5bd; --line: #2b2f45;
+  --accent: #8f9bff; --accent-soft: #24294a; --tip: #f2c062; --tip-soft: #352a12;
+  --code-bg: #0b0d16; --code-ink: #dfe3f5; --prompt-bg: #1f2340; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 1.0625rem; line-height: 1.6;
+  padding-inline: 16px;
+}
+.wrap {
+  max-width: 1120px; margin: 0 auto; padding-block: 32px 80px;
+  display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 48px;
+}
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; display: grid; gap: 16px; }
+@media (max-width: 860px) { nav.toc { position: static; } }
+.brand { font-family: var(--font-display); font-weight: 800; font-size: 1.2rem; line-height: 1.2; }
+.progress { display: grid; gap: 6px; }
+.progress-bar { height: 10px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
+.progress-label { font-size: .9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.toc a {
+  display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: 8px;
+  color: var(--ink); text-decoration: none; font-size: .95rem; line-height: 1.35;
+}
+.toc a:hover { background: var(--accent-soft); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.toc .n { font-family: var(--font-mono); font-size: .8rem; color: var(--muted); min-width: 1.6em; font-variant-numeric: tabular-nums; }
+.toc a.done .n { color: var(--accent); }
+.toc a.done .n::before { content: "✓"; }
+.toc a.done .n span { display: none; }
+@media (max-width: 860px) { .toc ol { display: none; } }
+
+main { min-width: 0; display: grid; gap: 56px; }
+.intro h1 {
+  font-family: var(--font-display); font-weight: 800; font-size: clamp(1.9rem, 5vw, 2.8rem);
+  line-height: 1.1; margin: 0 0 12px; text-wrap: balance; letter-spacing: -.02em;
+}
+.intro p { max-width: 62ch; margin: 0 0 12px; }
+.lead { font-size: 1.2rem; color: var(--muted); }
+.howto { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px; }
+.howto div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: .95rem; }
+.howto b { display: block; font-family: var(--font-display); font-size: .95rem; margin-bottom: 2px; }
+
+section.lesson { scroll-margin-top: 24px; display: grid; gap: 16px; max-width: 72ch; }
+.lesson-head { display: flex; gap: 16px; align-items: flex-start; }
+.badge {
+  flex: none; width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent); font-family: var(--font-display); font-weight: 800; font-size: 1.25rem;
+}
+.lesson-head h2 { font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+.meta { font-size: .85rem; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; margin-top: 4px; }
+.lesson p { margin: 0; }
+.goal { font-size: 1.1rem; }
+h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; margin: 8px 0 0; }
+
+ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 8px; }
+ol.steps > li::before {
+  content: counter(s); font-family: var(--font-mono); font-weight: 600; font-size: .85rem;
+  width: 1.7rem; height: 1.7rem; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent);
+  display: grid; place-items: center; margin-top: .1rem;
+}
+ol.steps > li > div { min-width: 0; display: grid; gap: 8px; }
+ul { margin: 0; padding-left: 1.2em; }
+.ui { font-weight: 700; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+code.i { font-family: var(--font-mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+
+/* Prompt = mensaje que tú le escribes a Claude */
+.prompt { position: relative; background: var(--prompt-bg); border: 1px solid var(--line); border-radius: 16px 16px 4px 16px; min-width: 0; }
+.prompt pre {
+  margin: 0; padding: 30px 16px 14px; white-space: pre-wrap; word-wrap: break-word;
+  font-family: var(--font-body); font-size: 1rem; line-height: 1.55; color: var(--ink);
+}
+.prompt .lang { position: absolute; left: 14px; top: 8px; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+/* Código / comandos */
+.code { position: relative; background: var(--code-bg); border-radius: 10px; min-width: 0; }
+.code pre {
+  margin: 0; padding: 16px; padding-right: 92px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: .88rem; line-height: 1.55; color: var(--code-ink);
+}
+button.copy {
+  position: absolute; top: 8px; right: 8px; font: 600 .8rem var(--font-body);
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+}
+button.copy:hover { border-color: var(--accent); }
+button.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.see { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 10px 10px 0; }
+.tip { border-left: 4px solid var(--tip); background: var(--tip-soft); padding: 10px 14px; border-radius: 0 10px 10px 0; }
+.see b, .tip b { display: block; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; }
+.tip b { color: var(--tip); } .see b { color: var(--accent); }
+
+.compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.compare > div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.compare b { display: block; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+details > summary { cursor: pointer; font-weight: 700; }
+details[open] > summary { margin-bottom: 10px; }
+
+.done-row { display: flex; align-items: center; gap: 12px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.done-row input { width: 22px; height: 22px; accent-color: var(--accent); cursor: pointer; }
+.done-row label { font-weight: 700; cursor: pointer; }
+
+table.gloss { border-collapse: collapse; width: 100%; font-size: .95rem; }
+.gloss-wrap { overflow-x: auto; }
+table.gloss td { border-top: 1px solid var(--line); padding: 8px 10px; vertical-align: top; }
+table.gloss td:first-child { font-weight: 700; white-space: nowrap; font-family: var(--font-mono); font-size: .9rem; }
+
+a { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .progress-fill { transition: none; } }
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Lecciones">
+    <div class="brand">Claude Code<br>Paso a Paso</div>
+    <div class="progress">
+      <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
+      <div class="progress-label" id="plabel">0 de 9 lecciones terminadas</div>
+    </div>
+    <ol id="toc"></ol>
+  </nav>
+
+  <main>
+    <header class="intro">
+      <h1>Aprende a trabajar con Claude Code, una lección a la vez</h1>
+      <p class="lead">9 lecciones cortas, de 15 a 30 minutos cada una. No necesitas saber programar.</p>
+      <p>Claude Code es un asistente que <b>lee, escribe y arregla código por ti</b>. Tú le hablas en español y él hace el trabajo. Aquí aprendes a pedírselo bien, a revisar lo que hace y a sacarle el máximo partido.</p>
+      <div class="howto">
+        <div><b>Dos ventanas</b>Esta página a un lado y Claude Code al otro.</div>
+        <div><b>Copia los mensajes</b>Los recuadros azules son mensajes para Claude. Pulsa «Copiar» y pégalos.</div>
+        <div><b>Marca tu avance</b>Al final de cada lección marca «Lo terminé».</div>
+      </div>
+    </header>
+
+    <!-- 1 -->
+    <section class="lesson" id="l1" data-title="Qué es y dónde se abre">
+      <div class="lesson-head"><div class="badge">1</div><div><h2>Qué es Claude Code y dónde abrirlo</h2><div class="meta">15 minutos</div></div></div>
+      <p class="goal">Un chat normal con una IA solo te <i>dice</i> qué hacer. Claude Code <b>lo hace</b>: abre tus archivos, los modifica, ejecuta pruebas y guarda los cambios. Es como tener un programador al lado al que le das instrucciones.</p>
+      <p>Trabaja sobre un <b>repositorio</b>: una carpeta de proyecto guardada en GitHub. Tú ya tienes uno, <b>Camilo13</b>.</p>
+      <h3>La forma más fácil: en el navegador</h3>
+      <ol class="steps">
+        <li><div>Abre <a href="https://claude.ai/code" target="_blank" rel="noopener">claude.ai/code</a> e inicia sesión con tu cuenta de Claude.</div></li>
+        <li><div>Si te lo pide, conecta tu cuenta de <b>GitHub</b> y dale acceso a tu repositorio <b>Camilo13</b>.</div></li>
+        <li><div>Elige el repositorio <b>Camilo13</b> y empieza una sesión nueva. Verás una caja para escribir, como en cualquier chat.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una pantalla de chat conectada a tu repositorio. Lo que escribas ahí, Claude lo hará sobre los archivos de Camilo13.</div>
+      <div class="tip"><b>Otras formas de usarlo (para más adelante)</b>También existe la <b>app de escritorio</b> de Claude (pestaña Code) y la versión de <b>terminal</b>, que se abre escribiendo <code class="i">claude</code> dentro de una carpeta. Funcionan igual. Las lecciones sirven para cualquiera de ellas.</div>
+    </section>
+
+    <!-- 2 -->
+    <section class="lesson" id="l2" data-title="Tu primera conversación">
+      <div class="lesson-head"><div class="badge">2</div><div><h2>Tu primera conversación: solo preguntar</h2><div class="meta">15 minutos</div></div></div>
+      <p class="goal">Empieza sin cambiar nada. Usa a Claude como un guía que te explica lo que hay en tu proyecto.</p>
+      <ol class="steps">
+        <li><div>Pega este mensaje y envíalo:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>¿Qué hay en este repositorio? Explícamelo en 5 líneas, como si yo no supiera programar. No cambies ningún archivo.</pre></div></div></li>
+        <li><div>Fíjate en lo que hace mientras responde: verás que <b>abre y lee archivos</b> por su cuenta antes de contestar.</div></li>
+        <li><div>Sigue preguntando. Por ejemplo:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>¿Qué es un archivo README y para qué sirve el de este proyecto?</pre></div></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una explicación sencilla de tu repositorio, con los cursos que tiene. No debe haber ningún archivo cambiado.</div>
+      <div class="tip"><b>Puedes interrumpirlo</b>Si Claude se va por otro lado, pulsa el botón de detener (o la tecla <b>Esc</b> en la terminal) y explícale mejor lo que quieres. Corregir pronto ahorra mucho tiempo.</div>
+    </section>
+
+    <!-- 3 -->
+    <section class="lesson" id="l3" data-title="Crear un proyecto de práctica">
+      <div class="lesson-head"><div class="badge">3</div><div><h2>Crear un proyecto de práctica con errores escondidos</h2><div class="meta">15 minutos</div></div></div>
+      <p class="goal">Para aprender necesitas algo que arreglar. Le vas a pedir a Claude que construya una mini tienda <b>con errores a propósito</b>. En la lección siguiente, otra conversación tendrá que encontrarlos.</p>
+      <ol class="steps">
+        <li><div>Copia y envía este mensaje:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Crea una carpeta llamada practica/ con un mini programa en Python de una tienda de café:
+- un archivo tienda.py con funciones para calcular el total de un carrito, aplicar un descuento en porcentaje y restar productos del inventario
+- un archivo test_tienda.py con 6 pruebas que se ejecuten con: python3 -m unittest
+- un archivo LEEME.md que explique cómo ejecutar las pruebas
+
+Esconde 3 errores en tienda.py para que 3 pruebas fallen. Los errores deben parecer descuidos normales. No pongas comentarios que los delaten y NO me digas cuáles son.
+Usa solo Python estándar. Al terminar, ejecuta las pruebas y dime solo cuántas fallan.</pre></div></div></li>
+        <li><div>Cuando termine, empieza una <b>sesión nueva</b>: en la web, botón de nueva sesión; en la terminal, escribe <code class="i">/clear</code>. Así la siguiente conversación <b>no sabrá</b> dónde están los errores.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una carpeta <code class="i">practica/</code> nueva y un mensaje del tipo «3 de 6 pruebas fallan».</div>
+      <div class="tip"><b>Qué es una «prueba»</b>Una prueba (test) es un pequeño programa que comprueba que otro funciona. Por ejemplo: «si compro 2 cafés de 10, el total debe ser 20». Si el resultado no coincide, la prueba falla. Para Claude son oro: le dicen si su trabajo está bien.</div>
+    </section>
+
+    <!-- 4 -->
+    <section class="lesson" id="l4" data-title="Cómo pedir bien">
+      <div class="lesson-head"><div class="badge">4</div><div><h2>Cómo pedir bien (la lección más importante)</h2><div class="meta">25 minutos</div></div></div>
+      <p class="goal">La calidad del resultado depende de cómo pides. Un buen mensaje tiene 4 partes:</p>
+      <div class="gloss-wrap"><table class="gloss">
+        <tr><td>Qué</td><td>El objetivo, en una frase.</td></tr>
+        <tr><td>Dónde</td><td>Qué archivos o carpeta. Puedes escribir <code class="i">@</code> y el nombre del archivo para señalarlo.</td></tr>
+        <tr><td>Reglas</td><td>Lo que no debe hacer o cómo debe hacerlo.</td></tr>
+        <tr><td>Cómo comprobar</td><td>Cómo sabrá Claude que terminó bien: «ejecuta las pruebas hasta que pasen».</td></tr>
+      </table></div>
+      <div class="compare">
+        <div><b>Mensaje flojo</b>arregla la tienda</div>
+        <div><b>Mensaje bueno</b>En practica/ hay pruebas que fallan. Arregla el código de tienda.py, no las pruebas, y ejecuta las pruebas hasta que todas pasen.</div>
+      </div>
+      <ol class="steps">
+        <li><div>En tu sesión nueva, pega este mensaje:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>En la carpeta practica/ hay pruebas que fallan.
+1. Ejecuta: python3 -m unittest (dentro de practica/)
+2. Para cada prueba que falla, explícame la causa en una frase sencilla ANTES de tocar nada.
+3. Arregla el código de tienda.py. No cambies las pruebas.
+4. Vuelve a ejecutar las pruebas hasta que todas pasen.
+5. Al final, hazme una tabla: archivo | error | arreglo.</pre></div></div></li>
+        <li><div>Lee la tabla final. ¿Entiendes cada error? Si no, pregunta:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Explícame el segundo error con un ejemplo de la vida real.</pre></div></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Que Claude ejecuta las pruebas, explica los 3 errores, los corrige y termina con <b>6 de 6 pruebas correctas</b>.</div>
+      <div class="tip"><b>La regla de oro</b>Dale a Claude siempre una forma de <b>comprobar su trabajo</b> (pruebas, ejecutar el programa, una captura de pantalla). Así se corrige solo en vez de adivinar.</div>
+    </section>
+
+    <!-- 5 -->
+    <section class="lesson" id="l5" data-title="Planificar antes de construir">
+      <div class="lesson-head"><div class="badge">5</div><div><h2>Planificar antes de construir</h2><div class="meta">25 minutos</div></div></div>
+      <p class="goal">Para algo nuevo o grande, primero pide un <b>plan</b>. Lo revisas, lo corriges y solo después Claude escribe código. Es como revisar el plano antes de construir la casa.</p>
+      <ol class="steps">
+        <li><div>Activa el <b>modo plan</b>. En la web y en la app de escritorio, búscalo en el selector de modo, junto a la caja de texto. En la terminal, pulsa <b>Shift + Tab</b> hasta que veas «plan mode». En este modo Claude investiga y propone, pero <b>no cambia archivos</b>.</div></li>
+        <li><div>Pide una función nueva:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Quiero añadir a practica/ cupones de descuento: el cupón BIENVENIDA da 10% y el cupón VIP da 25%. Un cupón que no existe no hace nada.
+Primero escribe las pruebas, luego el código. Proponme un plan antes de empezar.</pre></div></div></li>
+        <li><div>Lee el plan y <b>corrige algo</b>, aunque sea pequeño. Por ejemplo:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Me gusta el plan, pero los cupones deben funcionar también en minúsculas (vip, bienvenida). Añade una prueba para eso.</pre></div></div></li>
+        <li><div>Aprueba el plan. Claude lo construye y ejecuta las pruebas.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Primero un plan por pasos sin cambios en los archivos. Después de aprobarlo, el código nuevo y todas las pruebas en verde.</div>
+    </section>
+
+    <!-- 6 -->
+    <section class="lesson" id="l6" data-title="Darle memoria (CLAUDE.md)">
+      <div class="lesson-head"><div class="badge">6</div><div><h2>Darle memoria a Claude</h2><div class="meta">20 minutos</div></div></div>
+      <p class="goal">Cada sesión nueva empieza «sin recuerdos». Para que no tengas que repetir siempre lo mismo, existe un archivo llamado <code class="i">CLAUDE.md</code>. Claude lo lee automáticamente al empezar. Es su libreta de instrucciones del proyecto.</p>
+      <ol class="steps">
+        <li><div>Escribe el comando <code class="i">/init</code> y envíalo. Claude revisará el proyecto y creará un <code class="i">CLAUDE.md</code>.</div></li>
+        <li><div>Hazlo corto y añade tus propias reglas:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Deja CLAUDE.md en menos de 20 líneas. Añade estas reglas:
+- Respóndeme siempre en español y con palabras sencillas.
+- Las pruebas de practica/ se ejecutan con: python3 -m unittest
+- Nunca cambies las pruebas para que pasen; arregla el código.
+- Antes de cambios grandes, propón un plan.</pre></div></div></li>
+        <li><div>Empieza una <b>sesión nueva</b> y comprueba que lo recuerda:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>¿Qué reglas tengo que seguir en este proyecto y cómo ejecuto las pruebas?</pre></div></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Que Claude responde con tus reglas sin que se las repitas.</div>
+      <div class="tip"><b>Truco</b>Cada vez que Claude cometa el mismo error dos veces, dile: «añade a CLAUDE.md una regla para que no vuelva a pasar».</div>
+    </section>
+
+    <!-- 7 -->
+    <section class="lesson" id="l7" data-title="Revisar y deshacer">
+      <div class="lesson-head"><div class="badge">7</div><div><h2>Revisar lo que hizo y deshacer errores</h2><div class="meta">20 minutos</div></div></div>
+      <p class="goal">Claude es muy bueno, pero <b>tú eres el responsable</b> del resultado. Aprende a ver qué cambió y a volver atrás.</p>
+      <ol class="steps">
+        <li><div>Pide un resumen de los cambios:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Muéstrame qué archivos cambiaste en esta sesión y explícame cada cambio en una línea.</pre></div></div></li>
+        <li><div>Pide una revisión, como lo haría un compañero exigente:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Revisa el código de practica/ como un revisor exigente. Dime 3 situaciones en las que podría fallar (por ejemplo, cantidades negativas) y añade una prueba para cada una.</pre></div></div></li>
+        <li><div>Practica deshacer. Pide algo que no quieres:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Cambia todos los nombres de las funciones de tienda.py al inglés.</pre></div>
+          Y luego deshazlo:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Deshaz el último cambio: vuelve a dejar los nombres en español y comprueba que las pruebas pasan.</pre></div>
+          <p>En la terminal también puedes pulsar <b>Esc dos veces</b> (o escribir <code class="i">/rewind</code>) para volver a un punto anterior.</p></div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Una lista clara de cambios, 3 pruebas nuevas y los nombres otra vez en español.</div>
+    </section>
+
+    <!-- 8 -->
+    <section class="lesson" id="l8" data-title="Tus propios atajos">
+      <div class="lesson-head"><div class="badge">8</div><div><h2>Crear tus propios atajos</h2><div class="meta">20 minutos</div></div></div>
+      <p class="goal">Si usas el mismo mensaje muchas veces, conviértelo en un <b>comando propio</b>. Luego solo escribes <code class="i">/revisar</code> y Claude sabe qué hacer.</p>
+      <ol class="steps">
+        <li><div>Pídele que te lo cree:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Créame un comando propio (una skill) llamado "revisar", en .claude/skills/revisar/SKILL.md, que haga esto:
+1. Ejecutar las pruebas de practica/
+2. Si alguna falla, explicar la causa y arreglar el código (nunca las pruebas)
+3. Terminar con un resumen de 3 líneas en español sencillo.</pre></div></div></li>
+        <li><div>Rompe algo para probarlo:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Mete un error pequeño en tienda.py a propósito y no me digas dónde.</pre></div></div></li>
+        <li><div>Empieza una sesión nueva y escribe solo <code class="i">/revisar</code>.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Que con una sola palabra Claude encuentra el error, lo arregla y te da el resumen.</div>
+      <div class="tip"><b>Comandos que ya vienen incluidos</b>Escribe <code class="i">/</code> en la caja de texto y verás la lista. Los más útiles: <code class="i">/init</code> crea la memoria, <code class="i">/clear</code> empieza de cero y <code class="i">/help</code> muestra la ayuda.</div>
+    </section>
+
+    <!-- 9 -->
+    <section class="lesson" id="l9" data-title="Guardar y compartir">
+      <div class="lesson-head"><div class="badge">9</div><div><h2>Guardar tu trabajo en GitHub</h2><div class="meta">20 minutos</div></div></div>
+      <p class="goal">Los cambios no están a salvo hasta que se guardan en GitHub. Claude también hace eso por ti.</p>
+      <div class="gloss-wrap"><table class="gloss">
+        <tr><td>commit</td><td>Una «foto» de tus archivos en un momento, con una descripción. Puedes volver a ella cuando quieras.</td></tr>
+        <tr><td>push</td><td>Subir esas fotos a GitHub.</td></tr>
+        <tr><td>rama</td><td>Una copia paralela del proyecto para probar cosas sin tocar la versión principal.</td></tr>
+        <tr><td>pull request</td><td>Una propuesta para juntar tu rama con la versión principal, que alguien revisa antes de aceptar.</td></tr>
+      </table></div>
+      <ol class="steps">
+        <li><div>Guarda y sube:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Haz un commit con todo lo que hicimos en practica/, con un mensaje claro en español, y súbelo a GitHub.</pre></div></div></li>
+        <li><div>Pide una propuesta de cambio:
+          <div class="prompt"><span class="lang">Mensaje para Claude</span><pre>Abre un pull request con estos cambios y escribe una descripción sencilla de lo que se hizo.</pre></div></div></li>
+        <li><div>Abre el enlace que te da Claude y mira tu pull request en GitHub.</div></li>
+      </ol>
+      <div class="see"><b>Qué deberías ver</b>Tus cambios en GitHub y un pull request con su descripción.</div>
+      <div class="tip"><b>Trabaja en paralelo</b>En la web puedes tener <b>varias sesiones a la vez</b>, cada una con una tarea distinta, y revisarlas luego, incluso desde el móvil.</div>
+    </section>
+
+    <!-- Final -->
+    <section class="lesson" id="fin" data-skip="1">
+      <div class="lesson-head"><div class="badge">✓</div><div><h2>¿Terminaste las 9? Tus 6 hábitos de experto</h2></div></div>
+      <ol class="steps">
+        <li><div><b>Pide con las 4 partes:</b> qué, dónde, reglas y cómo comprobar.</div></li>
+        <li><div><b>Dale una forma de comprobar</b> su trabajo, como pruebas o ejecutar el programa.</div></li>
+        <li><div><b>Planifica primero</b> todo lo que sea nuevo o grande.</div></li>
+        <li><div><b>Una tarea por sesión.</b> Al cambiar de tema, empieza una sesión nueva.</div></li>
+        <li><div><b>Mantén CLAUDE.md</b> corto y con tus reglas.</div></li>
+        <li><div><b>Revisa siempre</b> lo que cambió antes de guardarlo.</div></li>
+      </ol>
+      <h3>Cuando quieras seguir</h3>
+      <p>El curso avanzado de tu repositorio (carpeta <code class="i">curso-claude-code</code>) explica cosas más potentes: <b>hooks</b> (acciones automáticas), <b>subagentes</b> (varios Claude trabajando a la vez), <b>MCP</b> (conectar Claude con otras herramientas) y usar Claude desde scripts. La documentación oficial está en <a href="https://code.claude.com/docs" target="_blank" rel="noopener">code.claude.com/docs</a>.</p>
+      <h3>Comandos y palabras que vas a oír</h3>
+      <div class="gloss-wrap"><table class="gloss">
+        <tr><td>/init</td><td>Crea el archivo de memoria CLAUDE.md.</td></tr>
+        <tr><td>/clear</td><td>Empieza una conversación nueva (los archivos no se tocan).</td></tr>
+        <tr><td>/help</td><td>Muestra todos los comandos.</td></tr>
+        <tr><td>@archivo</td><td>Señala un archivo concreto en tu mensaje.</td></tr>
+        <tr><td>Modo plan</td><td>Claude investiga y propone sin cambiar nada.</td></tr>
+        <tr><td>Esc</td><td>Detiene a Claude (en la terminal). Esc dos veces vuelve atrás.</td></tr>
+        <tr><td>CLAUDE.md</td><td>La libreta de reglas del proyecto, que Claude lee al empezar.</td></tr>
+        <tr><td>Skill</td><td>Un comando propio, como /revisar.</td></tr>
+        <tr><td>Contexto</td><td>Todo lo que Claude «tiene en la cabeza» en la conversación. Si se llena, rinde peor; por eso conviene empezar sesiones nuevas.</td></tr>
+      </table></div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function () {
+  var KEY = "cc-paso-a-paso-v1";
+  var lessons = Array.prototype.slice.call(document.querySelectorAll("section.lesson:not([data-skip])"));
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+  var toc = document.getElementById("toc");
+  lessons.forEach(function (sec, i) {
+    var li = document.createElement("li");
+    var a = document.createElement("a");
+    a.href = "#" + sec.id;
+    a.id = "toc-" + sec.id;
+    a.innerHTML = '<span class="n"><span>' + (i + 1) + '</span></span><span></span>';
+    a.lastChild.textContent = sec.getAttribute("data-title");
+    li.appendChild(a); toc.appendChild(li);
+
+    var row = document.createElement("div");
+    row.className = "done-row";
+    var cb = document.createElement("input");
+    cb.type = "checkbox"; cb.id = "done-" + sec.id; cb.checked = !!state[sec.id];
+    var lb = document.createElement("label");
+    lb.htmlFor = cb.id; lb.textContent = "Lo terminé";
+    cb.addEventListener("change", function () { state[sec.id] = cb.checked; save(); render(); });
+    row.appendChild(cb); row.appendChild(lb); sec.appendChild(row);
+  });
+
+  function render() {
+    var n = 0;
+    lessons.forEach(function (sec) {
+      var d = !!state[sec.id]; if (d) n++;
+      document.getElementById("toc-" + sec.id).classList.toggle("done", d);
+    });
+    document.getElementById("fill").style.width = (100 * n / lessons.length) + "%";
+    document.getElementById("plabel").textContent = n + " de " + lessons.length + " lecciones terminadas";
+  }
+  render();
+
+  document.querySelectorAll(".code, .prompt").forEach(function (box) {
+    var btn = document.createElement("button");
+    btn.className = "copy"; btn.type = "button"; btn.textContent = "Copiar";
+    btn.addEventListener("click", function () {
+      var pre = box.querySelector("pre");
+      function ok() { btn.textContent = "¡Copiado!"; setTimeout(function () { btn.textContent = "Copiar"; }, 1500); }
+      function fallback() {
+        var r = document.createRange(); r.selectNodeContents(pre);
+        var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        btn.textContent = "Pulsa Ctrl+C";
+      }
+      try { navigator.clipboard.writeText(pre.textContent).then(ok, fallback); } catch (e) { fallback(); }
+    });
+    box.appendChild(btn);
+  });
+})();
+</script>

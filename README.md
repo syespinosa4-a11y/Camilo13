@@ -1,5 +1,9 @@
 # Camilo13
 
-- 🟢 **Empieza aquí:** [Databricks Paso a Paso (versión fácil)](databricks-facil/index.html) — 9 lecciones para principiantes
-- 📚 [Curso corto de Claude Code + laboratorio](curso-claude-code/README.md)
-- 🧱 [Curso avanzado de Databricks + laboratorio](curso-databricks/README.md)
+**Versiones fáciles (empieza aquí):**
+- 🟢 [Claude Code Paso a Paso](claude-code-facil/index.html) — 9 lecciones para principiantes
+- 🟢 [Databricks Paso a Paso](databricks-facil/index.html) — 9 lecciones para principiantes
+
+**Versiones avanzadas:**
+- 📚 [Curso de Claude Code + laboratorio](curso-claude-code/README.md)
+- 🧱 [Curso de Databricks + laboratorio](curso-databricks/README.md)
